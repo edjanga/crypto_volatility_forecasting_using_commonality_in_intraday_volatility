@@ -1,0 +1,17 @@
+venv/
+venv
+.DS_Store
+./slurm-%j.out
+data_centre/tmp
+data_centre/tmp/
+data_centre/databases
+data_centre/databases/
+test.py
+.idea/
+.idea
+__pycache__
+correct_commit.sh
+plots/tmp
+plots/tmp/
+plots/*.png
+data_centre/.env

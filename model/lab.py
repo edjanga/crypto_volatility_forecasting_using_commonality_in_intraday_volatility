@@ -19,6 +19,15 @@ from hottbox.pdtools import pd_to_tensor
 from itertools import product
 from scipy.stats import norm
 
+"""Functions used to facilitate computation within classes."""
+
+
+def group_members_external_df(df: pd.DataFrame, df2: pd.DataFrame, drop_symbol: bool=True) -> pd.DataFrame:
+    if drop_symbol:
+        return df.droplevel(1).mul(df2)
+    else:
+        return df.mul(df2)
+
 
 @dataclass
 class Market:
@@ -192,7 +201,7 @@ class FeatureHARCSR(FeatureBuilderBase):
         symbol_csr_df.drop(symbol[-1], axis=1, inplace=True)
         symbol_csr_df.ffill(inplace=True)
         symbol_csr_df.dropna(inplace=True)
-        symbol_rv_df = symbol_rv_df.join(symbol_csr_df, how='left', rsuffix='_CDR')
+        symbol_rv_df = symbol_rv_df.join(symbol_csr_df, how='left', rsuffix='_CSR')
         return symbol_rv_df
 
 
@@ -243,17 +252,17 @@ class ModelBuilder:
     models = [None, 'har', 'har_dummy_markets', 'har_csr', 'har_cdr', 'har_universal']
     models_rolling_metrics_dd = {model: dict([('qlike', {}), ('r2', {}), ('mse', {}),
                                               ('tstats', {}), ('pvalues', {}), ('coefficient', {})])
-                                 for _, model in enumerate(models)}
-    _coins = coin_ls
+                                 for _, model in enumerate(models) if model}
+    _coins = coin_ls[:7]+coin_ls[13:] #'matic', 'doge', 'ftm', 'avax'
+    print(_coins)
     _coins = [''.join((coin, 'usdt')).upper() for _, coin in enumerate(_coins)]
-    _pairs = list(product(coin_ls, repeat=2))
-    _pairs = [(''.join((syms[0], 'usdt')).upper(), ''.join((syms[-1], 'usdt')).upper())
-              for _, syms in enumerate(_pairs)]
+    _pairs = list(product(_coins, repeat=2))
+    _pairs = [(syms[0], syms[-1]) for _, syms in enumerate(_pairs)]
 
     def __init__(self, h: str, F: typing.List[str], L: str, Q: str, model_type: str=None, s=None, b: str='5T'):
         """
             h: Forecasting horizon
-            S: Sliding window
+            s: Sliding window
             F: Feature building lookback
             L: Lookback window for model training
             Q: Model update frequency
@@ -262,13 +271,16 @@ class ModelBuilder:
         self._h = h
         self._F = F
         self._L = L
-        self._Q = pd.to_timedelta('1D') // pd.to_timedelta(Q)#Q
+        self._Q = Q
         self._b = b
+        self._L = L
         max_feature_building_lookback = \
-            max([pd.to_timedelta(lookback) // pd.to_timedelta(self._b) for _, lookback in enumerate(self._F)])
+            max([pd.to_timedelta(lookback) // pd.to_timedelta(self._b) if 'M' not in lookback else
+                 pd.to_timedelta(''.join((str(30 * int(lookback.split('M')[0])), 'D'))) // pd.to_timedelta(self._b)
+                 for _, lookback in enumerate(self._F)])
         upper_bound_feature_building_lookback = \
-            pd.to_timedelta(int(self._L.split('M')[0])) // pd.to_timedelta(self._b) if 'M' in self._L else \
-                pd.to_timedelta(self._L) // pd.to_timedelta(self._b)
+            pd.to_timedelta(''.join((str(30 * int(self.L.split('M')[0])), 'D'))) // pd.to_timedelta(self._b) \
+                if 'M' in self._L else pd.to_timedelta(self._L) // pd.to_timedelta(self._b)
         if upper_bound_feature_building_lookback < max_feature_building_lookback:
             raise ValueError('Lookback window for model training is smaller than the furthest lookback window '
                              'in feature building.')
@@ -312,10 +324,12 @@ class ModelBuilder:
     @F.setter
     def F(self, F: typing.List[str]):
         max_feature_building_lookback = \
-            max([pd.to_timedelta(lookback) // pd.to_timedelta(self._b) for _, lookback in enumerate(F)])
+            max([pd.to_timedelta(lookback) // pd.to_timedelta(self._b) if 'M' not in lookback else
+                 pd.to_timedelta(''.join((str(30 * int(lookback.split('M')[0])), 'D'))) // pd.to_timedelta(self._b)
+                 for _, lookback in enumerate(F)])
         upper_bound_feature_building_lookback = \
-            pd.to_timedelta(int(self._L.split('M')[0])) // pd.to_timedelta(self._b) if 'M' in self._L else \
-                pd.to_timedelta(self._L) // pd.to_timedelta(self._b)
+            pd.to_timedelta(''.join((str(30 * int(self.L.split('M')[0])), 'D'))) // pd.to_timedelta(self._b) \
+                if 'M' in self._L else pd.to_timedelta(self._L) // pd.to_timedelta(self._b)
         if upper_bound_feature_building_lookback < max_feature_building_lookback:
             raise ValueError('Lookback window for model training is smaller than the furthest lookback window '
                              'in feature building.')
@@ -325,10 +339,12 @@ class ModelBuilder:
     @L.setter
     def L(self, L: str):
         max_feature_building_lookback = \
-            max([pd.to_timedelta(lookback) // pd.to_timedelta(self._b) for _, lookback in enumerate(self._F)])
+            max([pd.to_timedelta(lookback) // pd.to_timedelta(self._b) if 'M' not in lookback else
+                 pd.to_timedelta(''.join((str(30 * int(lookback.split('M')[0])), 'D'))) // pd.to_timedelta(self._b)
+                 for _, lookback in enumerate(self._F)])
         upper_bound_feature_building_lookback = \
-            pd.to_timedelta(int(self._L.split('M')[0])) // pd.to_timedelta(self._b) if 'M' in self._L else \
-                pd.to_timedelta(self._L) // pd.to_timedelta(self._b)
+            pd.to_timedelta(''.join((str(30 * int(L.split('M')[0])), 'D'))) // pd.to_timedelta(self._b) \
+                if 'M' in L else pd.to_timedelta(L) // pd.to_timedelta(self._b)
         if upper_bound_feature_building_lookback < max_feature_building_lookback:
             raise ValueError('Lookback window for model training is smaller than the furthest lookback window '
                              'in feature building.')
@@ -337,7 +353,7 @@ class ModelBuilder:
 
     @Q.setter
     def Q(self, Q: str):
-        self._Q = pd.to_timedelta('1D') // pd.to_timedelta(Q)#Q
+        self._Q = Q
 
     @model_type.setter
     def model_type(self, model_type: str):
@@ -374,98 +390,79 @@ class ModelBuilder:
             exog = pd.concat([exog_rv, exog_rest], axis=1)
         else:
             exog.symbol = exog.symbol.astype(int)
-        train_size = (pd.to_timedelta(self._L) // pd.to_timedelta(self._b))
+        train_size = (pd.to_timedelta(self._Q) // pd.to_timedelta(self._b))
         test_size = pd.to_timedelta(self._s) // pd.to_timedelta(self._b)
         regression = ModelBuilder._factory_regression_dd[regression_type]
-        if self._model_type == 'har_universal':
-            regression.fit_intercept = False
-            len_symbol = len(exog.symbol.unique())
         idx_ls = set(exog.index)
         idx_ls = list(idx_ls)
         idx_ls.sort()
         columns_length_dd = \
             {model_type: list(range(exog.shape[1]+1)) for _, model_type in enumerate(self.models) if model_type}
-        columns_length_dd['har_universal'] = columns_length_dd['har_universal'][:-2]
-        coefficient = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_length_dd[self._model_type]) #list(range(exog.shape[1]+1))
-        tstats = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_length_dd[self._model_type])
-        pvalues = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_length_dd[self._model_type])
-        #update_freq = pd.to_timedelta('1D') // pd.to_timedelta(self._Q)
-        coefficient_update = [date.strftime('%Y-%m-%d') for date in coefficient.index[::train_size//self._Q]]
-        for _, date in enumerate(coefficient_update):
-            X_train, y_train = exog.loc[date, :], endog.loc[date]
+        columns_length_dd['har_universal'] = columns_length_dd['har_universal'][:-1]
+        coefficient = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_length_dd[self._model_type])
+        tstats = pd.DataFrame(data=np.nan, index=idx_ls, columns=list(range(exog.shape[1]+1)))
+        pvalues = pd.DataFrame(data=np.nan, index=idx_ls, columns=list(range(exog.shape[1]+1)))
+        coefficient_update = [date.strftime('%Y-%m-%d') for date in coefficient.index[::train_size]]
+        for i, date in enumerate(coefficient_update):
+            X_train = exog.loc[date, :] if self._model_type != 'har_universal' else \
+                exog.loc[date, :].reset_index().set_index(['timestamp', 'symbol'])
+            y_train = endog.loc[date] if self._model_type != 'har_universal' else \
+                pd.concat([pd.DataFrame(endog.loc[date]),
+                           exog.loc[date, :]], axis=1).reset_index().set_index(['timestamp', 'symbol'])[['RV']]
             X_train.replace(-np.inf, np.nan, inplace=True)
             y_train.replace(-np.inf, np.nan, inplace=True)
             X_train.replace(np.inf, np.nan, inplace=True)
             y_train.replace(np.inf, np.nan, inplace=True)
             X_train.ffill(inplace=True)
             y_train.ffill(inplace=True)
-            if self.model_type == 'har_universal':
-                tmp = pd.concat([y_train, X_train], axis=1)
-                tmp = \
-                    tmp.reset_index().set_index(['timestamp', 'symbol']).subtract(tmp.groupby('symbol').mean())
-                tmp = tmp.reset_index().set_index('timestamp')
-                tmp = tmp[['RV']+['_'.join(('RV', F)) for _, F in enumerate(self._F)]+['symbol']]
-                symbol_s = tmp.pop('symbol')
-                y_train = tmp.pop('RV')
-                X_train = tmp
             rres = regression.fit(X_train, y_train)
             coefficient.loc[date, :] = \
                 np.concatenate((np.array([rres.intercept_]), rres.coef_)) if \
-                    self._model_type != 'har_universal' else rres.coef_
-            X_train = \
-                pd.concat([pd.Series(1.0, index=X_train.index, name='const'), X_train], axis=1) if \
-                    self._model_type != 'har_universal' else X_train
-            if self._model_type == 'har_universal':
-                columns = X_train.columns[::]
-                X_train = X_train.rename(columns={columns[i]: i for i, _ in enumerate(columns)})
-                pdb.set_trace()
-                yhat = (X_train * coefficient.loc[date, :]).sum(axis=1)
-                yhat.name = 'values'
-                yhat.index.name = 'timestamp'
-                yhat = pd.DataFrame(yhat)
-                symbol_df = pd.DataFrame(symbol_s)
-                yhat = \
-                    yhat.reset_index().join(symbol_df.reset_index().filter(
-                        regex='symbol'), how='inner').set_index('timestamp')
-                pdb.set_trace()
+                    self._model_type != 'har_universal' else \
+                    np.concatenate((np.array([rres.intercept_])[0], rres.coef_[0]))
+            X_train = pd.concat([pd.Series(1.0, index=X_train.index, name='const'), X_train], axis=1)
             """Tstats"""
             tstats.loc[date, :] = \
-                coefficient.loc[date, :].div((np.diag(np.matmul(X_train.values.transpose(),
-                                                                X_train.values)))/np.sqrt(X_train.shape[-1]))
+                coefficient[self._model_type].div((np.diag(np.matmul(X_train.values.transpose(),
+                                                                     X_train.values)))/np.sqrt(X_train.shape[-1]))
             """Pvalues"""
             pvalues.loc[date, :] = norm.cdf(tstats.loc[date, :].values)
-        coefficient.columns = \
-            np.concatenate((np.array(['const']), rres.feature_names_in_)) if \
-                self._model_type != 'har_universal' else rres.feature_names_in_
-        tstats.columns = np.concatenate((np.array(['const']), rres.feature_names_in_))if \
-                self._model_type != 'har_universal' else rres.feature_names_in_
-        pvalues.columns = np.concatenate((np.array(['const']), rres.feature_names_in_))if \
-                self._model_type != 'har_universal' else rres.feature_names_in_
-        exog = data.assign(const=1.0) if \
-                self._model_type != 'har_universal' else exog
+        tstats.dropna(axis=1, how='all', inplace=True)
+        pvalues.dropna(axis=1, how='all', inplace=True)
+        coefficient.columns = np.concatenate((np.array(['const']), rres.feature_names_in_))
+        tstats.columns = np.concatenate((np.array(['const']), rres.feature_names_in_))
+        pvalues.columns = np.concatenate((np.array(['const']), rres.feature_names_in_))
+        exog = data.assign(const=1.0)
+        exog = exog[['const']+list(rres.feature_names_in_)+['symbol']].reset_index().set_index(['timestamp', 'symbol'])\
+            if self._model_type == 'har_universal' else exog
         endog = \
             pd.Series(data=endog.apply(lambda x: ModelBuilder._factory_transformation_dd[transformation]['inverse'](x)),
                       index=endog.index)
-        if self._model_type != 'har_universal':
-            yhat = coefficient.mul(exog.loc[coefficient.index, :]).dropna().sum(axis=1)
+        if self._model_type == 'har_universal':
+            exog.sort_index(level=1, inplace=True)
+            yhat = exog.groupby(by=exog.index.get_level_values(1), group_keys=True).apply(group_members_external_df,
+                                                                                          coefficient).sum(axis=1)
+            yhat = yhat.droplevel(0)
         else:
-            yhat = coefficient.mul(exog.filter(regex=f'RV_').loc[coefficient.index, :]).dropna().sum(axis=1)
+            yhat = coefficient.mul(exog.loc[coefficient.index, :]).dropna().sum(axis=1)
         yhat = \
             pd.Series(data=yhat.apply(lambda x: ModelBuilder._factory_transformation_dd[transformation]['inverse'](x)),
                       index=yhat.index)
         endog_mean = pd.Series(index=yhat.index, data=np.nan)
-        tmp = endog.resample('1D').mean()
-        endog_mean.loc[tmp.index] = tmp
+        tmp = endog.resample(self._L).mean()
+        try:
+            endog_mean.loc[tmp.index[:-1]] = tmp.loc[tmp.index[:-1]]
+        except KeyError:
+            pdb.set_trace()
         endog_mean.ffill(inplace=True)
         series_name_dd = {True: symbol, False: None}
         mse = pd.Series(data=endog.loc[yhat.index].sub(yhat) ** 2,
                         name=series_name_dd[self._model_type != 'har_universal'])
-        mse = mse.resample(self._s).mean()
+        mse = mse.resample(6*self._s).mean()
         qlike = \
             pd.Series(data=(endog.loc[yhat.index].div(yhat))-np.log(endog.loc[yhat.index].div(yhat))-1,
                       name=series_name_dd[self._model_type != 'har_universal'])
-        qlike = qlike.groupby(by=qlike.index).mean()
-        qlike = qlike.resample(self._s).mean()
+        qlike = qlike.resample(6*self._s).mean()
         r2_num = (endog.loc[yhat.index].sub(yhat) ** 2).resample(6*self._s).sum()
         r2_denom = (endog.loc[yhat.index].sub(endog_mean) ** 2).resample(6*self._s).sum()
         r2 = pd.Series(data=1-r2_num.div(r2_denom), name=series_name_dd[self._model_type != 'har_universal'])
@@ -476,13 +473,12 @@ class ModelBuilder:
             if self._model_type != 'har_universal' else tstats.columns.str.replace('_'.join(('RV', '')), '')
         pvalues.columns = pvalues.columns.str.replace('_'.join((symbol[-1], '')), '') \
             if self._model_type != 'har_universal' else pvalues.columns.str.replace('_'.join(('RV', '')), '')
-        pdb.set_trace()
         return mse, qlike, r2, pvalues, tstats, coefficient
 
     def add_metrics(self, regression_type: str='linear', transformation=None, cross: bool=False,
-                    agg_day: bool=False, **kwargs) -> None:
+                    agg: str=None, **kwargs) -> None:
         if self._model_type != 'har_universal':
-            coin_ls = set(self._coins).intersection(set(kwargs['df'].columns)) #.str.replace('USDT', '').str.lower())
+            coin_ls = set(self._coins).intersection(set(kwargs['df'].columns))
             coin_ls = list(coin_ls)
             if cross:
                 coin_ls = list(product(coin_ls, repeat=2))
@@ -502,10 +498,13 @@ class ModelBuilder:
 
         def add_metrics_per_symbol(symbol: typing.Union[typing.Tuple[str], str],
                                    regression_type: str='linear', transformation=None, **kwargs) -> None:
-
             mse_s, qlike_s, r2_s, pvalues_df, tstats_df, coefficient_df = \
                 self.rolling_metrics(symbol=symbol, regression_type=regression_type,
                                      transformation=transformation, **kwargs)
+            if isinstance(symbol, tuple):
+                for series_s in [mse_s, qlike_s, r2_s]:
+                    series_s.name = '_'.join(series_s.name)
+                symbol = '_'.join(symbol)
             mse_dd[symbol] = mse_s
             qlike_dd[symbol] = qlike_s
             r2_dd[symbol] = r2_s
@@ -513,13 +512,13 @@ class ModelBuilder:
             tstats_dd[symbol] = tstats_df
             pvalues_dd[symbol] = pvalues_df
 
-
         if self._model_type != 'har_universal':
+            cross_dd = {True: self._pairs, False: coin_ls}
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 add_metrics_per_symbol_results_dd = \
                     {symbol: executor.submit(add_metrics_per_symbol(regression_type=regression_type, **kwargs,
                                                                     transformation=transformation, symbol=symbol))
-                     for symbol in coin_ls}
+                     for symbol in cross_dd[cross]}
         else:
             mse, qlike, r2, coefficient, tstats, pvalues = \
                 self.rolling_metrics(symbol=None, regression_type=regression_type, transformation=transformation,
@@ -548,10 +547,10 @@ class ModelBuilder:
         qlike.name = 'values'
         qlike = pd.DataFrame(qlike)
         qlike = qlike.assign(model=self._model_type)
-        # if agg_day:
-        #     r2 = r2.groupby(by=r2.index.date).agg({'values': 'mean', 'model': 'first'})
-        #     mse = mse.groupby(by=mse.index.date).agg({'values': 'mean', 'model': 'first'})
-        #     qlike = qlike.groupby(by=qlike.index.date).agg({'values': 'mean', 'model': 'first'})
+        agg_dd = {None: '3H', agg: agg}
+        r2 = r2.resample(agg_dd[agg]).agg({'values': 'mean', 'model': 'first'})
+        mse = mse.resample(agg_dd[agg]).agg({'values': 'mean', 'model': 'first'})
+        qlike = qlike.resample(agg_dd[agg]).agg({'values': 'mean', 'model': 'first'})
         ModelBuilder.models_rolling_metrics_dd[self._model_type]['mse'] = mse
         ModelBuilder.models_rolling_metrics_dd[self._model_type]['qlike'] = qlike
         ModelBuilder.models_rolling_metrics_dd[self._model_type]['r2'] = r2
@@ -595,19 +594,20 @@ if __name__ == '__main__':
     L = '1D'
     F = ['1H', '6H', '12H', '1D']
     model_builder_obj = ModelBuilder(F=F, h='30T', L=L, Q='1D', s=None, b='5T')
-    cross = False
-    for _, model_type in enumerate(['har_universal']): #model_builder_obj.models
+    cross = True
+    agg = '1D'
+    for _, model_type in enumerate(model_builder_obj.models):
         if model_type:
             model_builder_obj.model_type = model_type
             print(model_builder_obj.model_type)
             if model_type in ['har', 'har_dummy_markets', 'har_universal']:
-                model_builder_obj.add_metrics(df=rv, cross=cross)
+                model_builder_obj.add_metrics(df=rv, cross=cross, agg=agg)
             elif model_type == 'har_cdr':
                 cdr = data_obj.cdr_read()
-                model_builder_obj.add_metrics(df=rv, df2=cdr, cross=cross)
+                model_builder_obj.add_metrics(df=rv, df2=cdr, cross=cross, agg=agg)
             elif model_type == 'har_csr':
                 csr = data_obj.csr_read()
-                model_builder_obj.add_metrics(df=rv, df2=csr, cross=cross)
+                model_builder_obj.add_metrics(df=rv, df2=csr, cross=cross, agg=agg)
     mse = [model_builder_obj.models_rolling_metrics_dd[model]['mse'] for model in
            model_builder_obj.models_rolling_metrics_dd.keys() if model
            and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['mse'], pd.DataFrame)]
@@ -628,33 +628,37 @@ if __name__ == '__main__':
          for model in model_builder_obj.models_rolling_metrics_dd.keys() if model
          and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['coefficient'], pd.DataFrame)]
     coefficient = pd.concat(coefficient, axis=1)
+    coefficient = coefficient.loc[~coefficient.index.str.contains('USDT'), :]
+    model_specific_features = list(set(coefficient.index).difference((set(['const']+F))))
+    model_specific_features.sort()
+    coefficient = coefficient.T[['const']+F+model_specific_features].T
     coefficient.index.name = 'params'
     coefficient = pd.melt(coefficient.reset_index(), value_name='value', var_name='model', id_vars='params')
     coefficient.dropna(inplace=True)
     import plotly.express as px
-    pdb.set_trace()
-    # markers_ls = ['orange', 'green', 'blue', 'purple', 'red']
-    # markers_dd = {model: markers_ls[i] for i, model in enumerate(['har', 'har_dummy_markets', 'har_csr',
-    #                                                               'har_cdr', 'har_universal'])}
-    # col_grid = 1
-    # row_grid = 3
-    # fig = make_subplots(rows=row_grid, cols=col_grid,
-    #                     row_titles=['average R2', 'average MSE', 'average QLIKE'], shared_xaxes=True)
-    # save = False
-    # save_dd = {True: False, False: True}
-    # for i, model in enumerate(model_builder_obj.models):
-    #     if model:
-    #         tmp_df = r2.query(f'model == "{model}"')
-    #         tmp2_df = mse.query(f'model == "{model}"')
-    #         tmp3_df = qlike.query(f'model == "{model}"')
-    #         fig.add_trace(go.Scatter(x=tmp_df.index, y=tmp_df['values'], marker_color=markers_dd[model],
-    #                                  showlegend=True, name=model), row=1, col=1)
-    #         fig.add_trace(go.Scatter(x=tmp2_df.index, y=tmp2_df['values'], marker_color=markers_dd[model],
-    #                                  showlegend=save_dd[save], name=model), row=2, col=1)
-    #         fig.add_trace(go.Scatter(x=tmp3_df.index, y=tmp3_df['values'], showlegend=save_dd[save], name=model,
-    #                                  marker_color=markers_dd[model]), row=3, col=1)
-    #         fig.update_xaxes(tickangle=45, tickformat='%m-%Y')
-    #         fig.update_layout(height=1500, width=1200, title={'text': 'Rolling Metrics'})
-    # if save:
-    #     fig.write_image(os.path.abspath('rolling_metrics_05.png'))
-    # fig.show()
+    fig = px.bar(coefficient, x='params', y='value', color='model', barmode='group')
+    fig.show()
+    markers_ls = ['orange', 'green', 'blue', 'purple', 'red']
+    markers_dd = {model: markers_ls[i] for i, model in enumerate(model_builder_obj.models)}
+    col_grid = 1
+    row_grid = 3
+    fig = make_subplots(rows=row_grid, cols=col_grid,
+                        row_titles=['average R2', 'average MSE', 'average QLIKE'], shared_xaxes=True)
+    save = False
+    save_dd = {True: False, False: True}
+    for i, model in enumerate(model_builder_obj.models):
+        if model:
+            tmp_df = r2.query(f'model == "{model}"')
+            tmp2_df = mse.query(f'model == "{model}"')
+            tmp3_df = qlike.query(f'model == "{model}"')
+            fig.add_trace(go.Scatter(x=tmp_df.index, y=tmp_df['values'], marker_color=markers_dd[model],
+                                     showlegend=True, name=model), row=1, col=1)
+            fig.add_trace(go.Scatter(x=tmp2_df.index, y=tmp2_df['values'], marker_color=markers_dd[model],
+                                     showlegend=save_dd[save], name=model), row=2, col=1)
+            fig.add_trace(go.Scatter(x=tmp3_df.index, y=tmp3_df['values'], showlegend=save_dd[save], name=model,
+                                     marker_color=markers_dd[model]), row=3, col=1)
+            fig.update_xaxes(tickangle=45, tickformat='%m-%Y')
+            fig.update_layout(height=1500, width=1200, title={'text': 'Rolling Metrics'})
+    if save:
+        fig.write_image(os.path.abspath('rolling_metrics_05.png'))
+    fig.show()
