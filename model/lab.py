@@ -423,8 +423,8 @@ class ModelBuilder:
             X_train = pd.concat([pd.Series(1.0, index=X_train.index, name='const'), X_train], axis=1)
             """Tstats"""
             tstats.loc[date, :] = \
-                coefficient[self._model_type].div((np.diag(np.matmul(X_train.values.transpose(),
-                                                                     X_train.values)))/np.sqrt(X_train.shape[-1]))
+                coefficient.div((np.diag(np.matmul(X_train.values.transpose(),
+                                                   X_train.values)))/np.sqrt(X_train.shape[-1]))
             """Pvalues"""
             pvalues.loc[date, :] = norm.cdf(tstats.loc[date, :].values)
         tstats.dropna(axis=1, how='all', inplace=True)
