@@ -17,7 +17,7 @@ from data_centre.data import Reader
 import torch
 from hottbox.pdtools import pd_to_tensor
 from itertools import product
-from scipy.stats import norm
+from scipy.stats import t
 
 """Functions used to facilitate computation within classes."""
 
@@ -236,6 +236,7 @@ class FeatureHARUniversal(FeatureBuilderBase):
         rv_universal_df = group_symbol.apply(build_per_symbol).droplevel(0)
         label_encoder_obj = LabelEncoder()
         rv_universal_df.symbol = label_encoder_obj.fit_transform(rv_universal_df.symbol)
+        rv_universal_df = rv_universal_df.reset_index().set_index(['timestamp', 'symbol'])
         return rv_universal_df
 
 
@@ -253,7 +254,7 @@ class ModelBuilder:
     models_rolling_metrics_dd = {model: dict([('qlike', {}), ('r2', {}), ('mse', {}),
                                               ('tstats', {}), ('pvalues', {}), ('coefficient', {})])
                                  for _, model in enumerate(models) if model}
-    _coins = coin_ls[:7]+coin_ls[13:] #'matic', 'doge', 'ftm', 'avax'
+    _coins = coin_ls[:3]#coin_ls[:7]+coin_ls[13:] #'matic', 'doge', 'ftm', 'avax'
     print(_coins)
     _coins = [''.join((coin, 'usdt')).upper() for _, coin in enumerate(_coins)]
     _pairs = list(product(_coins, repeat=2))
@@ -388,27 +389,34 @@ class ModelBuilder:
             exog_rv.ffill(inplace=True)
             exog_rv.fillna(axis=1, method='ffill', inplace=True)
             exog = pd.concat([exog_rv, exog_rest], axis=1)
-        else:
-            exog.symbol = exog.symbol.astype(int)
         train_size = (pd.to_timedelta(self._Q) // pd.to_timedelta(self._b))
         test_size = pd.to_timedelta(self._s) // pd.to_timedelta(self._b)
         regression = ModelBuilder._factory_regression_dd[regression_type]
-        idx_ls = set(exog.index)
+        #regression.fit_intercept = False if self._model_type == 'har_universal' else True
+        idx_ls = set(exog.index) if self._model_type != 'har_universal' else set(exog.index.get_level_values(0))
         idx_ls = list(idx_ls)
         idx_ls.sort()
         columns_length_dd = \
             {model_type: list(range(exog.shape[1]+1)) for _, model_type in enumerate(self.models) if model_type}
-        columns_length_dd['har_universal'] = columns_length_dd['har_universal'][:-1]
         coefficient = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_length_dd[self._model_type])
-        tstats = pd.DataFrame(data=np.nan, index=idx_ls, columns=list(range(exog.shape[1]+1)))
-        pvalues = pd.DataFrame(data=np.nan, index=idx_ls, columns=list(range(exog.shape[1]+1)))
+        if self._model_type == 'har_universal':
+            coefficient_fe = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_length_dd[self._model_type][:-1])
+            coefficient_re = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_length_dd[self._model_type])
+        tstats = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_length_dd[self._model_type])
+        pvalues = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_length_dd[self._model_type])
         coefficient_update = [date.strftime('%Y-%m-%d') for date in coefficient.index[::train_size]]
         for i, date in enumerate(coefficient_update):
-            X_train = exog.loc[date, :] if self._model_type != 'har_universal' else \
-                exog.loc[date, :].reset_index().set_index(['timestamp', 'symbol'])
-            y_train = endog.loc[date] if self._model_type != 'har_universal' else \
-                pd.concat([pd.DataFrame(endog.loc[date]),
-                           exog.loc[date, :]], axis=1).reset_index().set_index(['timestamp', 'symbol'])[['RV']]
+            X_train, y_train = exog.loc[date, :], endog.loc[date]
+            # if self._model_type == 'har_universal':
+            #     """Fixed effect coefficients"""
+            #     X_train_fe = \
+            #         X_train.sub(X_train.groupby(by=X_train.index.get_level_values(1)).mean())
+            #     X_train_fe = X_train_fe.rename(columns={name: i for i, name in enumerate(X_train_fe.columns)})
+            #     y_train_fe = y_train.sub(y_train.groupby(by=y_train.index.get_level_values(1)).mean())
+            #     regression.fit_intercept = False
+            #     rres_fe = regression.fit(X_train_fe, y_train_fe)
+            #     coefficient_fe.loc[date, :] = rres_fe.coef_
+            #     regression.fit_intercept = True
             X_train.replace(-np.inf, np.nan, inplace=True)
             y_train.replace(-np.inf, np.nan, inplace=True)
             X_train.replace(np.inf, np.nan, inplace=True)
@@ -417,54 +425,82 @@ class ModelBuilder:
             y_train.ffill(inplace=True)
             rres = regression.fit(X_train, y_train)
             coefficient.loc[date, :] = \
-                np.concatenate((np.array([rres.intercept_]), rres.coef_)) if \
-                    self._model_type != 'har_universal' else \
-                    np.concatenate((np.array([rres.intercept_])[0], rres.coef_[0]))
-            X_train = pd.concat([pd.Series(1.0, index=X_train.index, name='const'), X_train], axis=1)
+                np.concatenate((np.array([rres.intercept_]), rres.coef_))# if \
+                #     self._model_type != 'har_universal' else \
+                #     np.concatenate((np.array([rres.intercept_])[0], rres.coef_[0]))
+            # if self._model_type == 'har_universal':
+            #     print((date, coefficient.loc[date, :]))
+            X_train = \
+                pd.concat([pd.Series(1.0, index=X_train.index, name='const'), X_train], axis=1)# if \
+                    #self._model_type != 'har_universal' else X_train
             """Tstats"""
             tstats.loc[date, :] = \
                 coefficient.div((np.diag(np.matmul(X_train.values.transpose(),
-                                                   X_train.values)))/np.sqrt(X_train.shape[-1]))
+                                                   X_train.values))/np.sqrt(X_train.shape[0])))
             """Pvalues"""
-            pvalues.loc[date, :] = norm.cdf(tstats.loc[date, :].values)
-        tstats.dropna(axis=1, how='all', inplace=True)
-        pvalues.dropna(axis=1, how='all', inplace=True)
+            pvalues.loc[date, :] = 2*(1-t.cdf(tstats.loc[date, :].values, df=X_train.shape[0]-coefficient.shape[1]-1))
+        #if self._model_type != 'har_universal':
         coefficient.columns = np.concatenate((np.array(['const']), rres.feature_names_in_))
         tstats.columns = np.concatenate((np.array(['const']), rres.feature_names_in_))
         pvalues.columns = np.concatenate((np.array(['const']), rres.feature_names_in_))
-        exog = data.assign(const=1.0)
-        exog = exog[['const']+list(rres.feature_names_in_)+['symbol']].reset_index().set_index(['timestamp', 'symbol'])\
-            if self._model_type == 'har_universal' else exog
+        # else:
+        #     coefficient.columns = rres.feature_names_in_
+        #     tstats.columns = rres.feature_names_in_
+        #     pvalues.columns = rres.feature_names_in_
+        exog = data.assign(const=1.0)# if self._model_type != 'har_universal' else data
         endog = \
             pd.Series(data=endog.apply(lambda x: ModelBuilder._factory_transformation_dd[transformation]['inverse'](x)),
                       index=endog.index)
         if self._model_type == 'har_universal':
-            exog.sort_index(level=1, inplace=True)
+            # coefficient_fe.columns = rres_fe.feature_names_in_
             yhat = exog.groupby(by=exog.index.get_level_values(1), group_keys=True).apply(group_members_external_df,
                                                                                           coefficient).sum(axis=1)
-            yhat = yhat.droplevel(0)
+            yhat = yhat.reorder_levels(['timestamp', 'symbol'])
+            # exog_fe = exog.filter(regex='RV')
+            # exog_fe = exog_fe.sub(exog_fe.groupby(by=exog_fe.index.get_level_values(1)).mean())
+            # yhat_fe = \
+            #     exog_fe.groupby(exog_fe.index.get_level_values(1), group_keys=True).apply(group_members_external_df,
+            #                                                                               coefficient_fe).sum(axis=1)
+            # yhat_fe = yhat_fe.reorder_levels(['timestamp', 'symbol'])
+            # sigma_fe = \
+            #     (yhat_fe.sub(endog) ** 2).sum()/\
+            #     (exog_fe.shape[0]-exog_fe.index.get_level_values(1).unique().shape[0]-coefficient_fe.shape[1])
+            # sigma_ols = \
+            #     (yhat.sub(endog) ** 2).sum() / (exog.shape[0] - (coefficient.shape[1]-1))
+            # pdb.set_trace()
         else:
             yhat = coefficient.mul(exog.loc[coefficient.index, :]).dropna().sum(axis=1)
         yhat = \
             pd.Series(data=yhat.apply(lambda x: ModelBuilder._factory_transformation_dd[transformation]['inverse'](x)),
                       index=yhat.index)
         endog_mean = pd.Series(index=yhat.index, data=np.nan)
-        tmp = endog.resample(self._L).mean()
-        try:
-            endog_mean.loc[tmp.index[:-1]] = tmp.loc[tmp.index[:-1]]
-        except KeyError:
-            pdb.set_trace()
+        tmp = endog.resample(self._L).mean() if self._model_type != 'har_universal' else \
+            endog.groupby(by=[pd.Grouper(level=-1), pd.Grouper(freq=self._L, level=0)]).mean()
+        tmp = tmp.reorder_levels(['timestamp', 'symbol']) if self._model_type == 'har_universal' else tmp
+        endog_mean.loc[tmp.index[:-1]] = tmp.loc[tmp.index[:-1]]
         endog_mean.ffill(inplace=True)
         series_name_dd = {True: symbol, False: None}
         mse = pd.Series(data=endog.loc[yhat.index].sub(yhat) ** 2,
                         name=series_name_dd[self._model_type != 'har_universal'])
-        mse = mse.resample(6*self._s).mean()
         qlike = \
-            pd.Series(data=(endog.loc[yhat.index].div(yhat))-np.log(endog.loc[yhat.index].div(yhat))-1,
+            pd.Series(data=(endog.loc[yhat.index].div(yhat)) - np.log(endog.loc[yhat.index].div(yhat)) - 1,
                       name=series_name_dd[self._model_type != 'har_universal'])
-        qlike = qlike.resample(6*self._s).mean()
-        r2_num = (endog.loc[yhat.index].sub(yhat) ** 2).resample(6*self._s).sum()
-        r2_denom = (endog.loc[yhat.index].sub(endog_mean) ** 2).resample(6*self._s).sum()
+        r2_num = (endog.loc[yhat.index].sub(yhat) ** 2)
+        r2_denom = (endog.loc[yhat.index].sub(endog_mean) ** 2)
+        if self._model_type != 'har_universal':
+            mse = mse.resample(6 * self._s).mean()
+            qlike = qlike.resample(6 * self._s).mean()
+            r2_num = r2_num.resample(6 * self._s).sum()
+            r2_denom = r2_denom.resample(6 * self._s).sum()
+        else:
+            mse = mse.groupby(by=[pd.Grouper(level=-1), pd.Grouper(freq=6 * self._s, level=0)]).mean()
+            mse = mse.groupby(by=[pd.Grouper(level=-1)]).mean()
+            qlike = qlike.groupby([pd.Grouper(level=-1), pd.Grouper(freq=6 * self._s, level=0)]).mean()
+            qlike = qlike.groupby(by=[pd.Grouper(level=-1)]).mean()
+            r2_num = r2_num.groupby(by=[pd.Grouper(level=-1), pd.Grouper(freq=6 * self._s, level=0)]).sum()
+            r2_num = r2_num.groupby(by=[pd.Grouper(level=-1)]).mean()
+            r2_denom = r2_denom.groupby(by=[pd.Grouper(level=-1), pd.Grouper(freq=6 * self._s, level=0)]).sum()
+            r2_denom = r2_denom.groupby(by=[pd.Grouper(level=-1)]).mean()
         r2 = pd.Series(data=1-r2_num.div(r2_denom), name=series_name_dd[self._model_type != 'har_universal'])
         coefficient.columns = \
             coefficient.columns.str.replace('_'.join((symbol[-1], '')), '') \
@@ -473,7 +509,7 @@ class ModelBuilder:
             if self._model_type != 'har_universal' else tstats.columns.str.replace('_'.join(('RV', '')), '')
         pvalues.columns = pvalues.columns.str.replace('_'.join((symbol[-1], '')), '') \
             if self._model_type != 'har_universal' else pvalues.columns.str.replace('_'.join(('RV', '')), '')
-        return mse, qlike, r2, pvalues, tstats, coefficient
+        return mse, qlike, r2, coefficient, tstats, pvalues
 
     def add_metrics(self, regression_type: str='linear', transformation=None, cross: bool=False,
                     agg: str=None, **kwargs) -> None:
@@ -498,7 +534,7 @@ class ModelBuilder:
 
         def add_metrics_per_symbol(symbol: typing.Union[typing.Tuple[str], str],
                                    regression_type: str='linear', transformation=None, **kwargs) -> None:
-            mse_s, qlike_s, r2_s, pvalues_df, tstats_df, coefficient_df = \
+            mse_s, qlike_s, r2_s, coefficient_df, tstats_df, pvalues_df = \
                 self.rolling_metrics(symbol=symbol, regression_type=regression_type,
                                      transformation=transformation, **kwargs)
             if isinstance(symbol, tuple):
@@ -592,10 +628,18 @@ if __name__ == '__main__':
     data_obj = Reader(file='../data_centre/tmp/aggregate2022')
     rv = data_obj.rv_read(cutoff_low=.05, cutoff_high=.05)
     L = '1D'
-    F = ['1H', '6H', '12H', '1D']
+    F = ['1H', '6H', '12H']
     model_builder_obj = ModelBuilder(F=F, h='30T', L=L, Q='1D', s=None, b='5T')
-    cross = True
-    agg = '1D'
+    for _, L in ['1D', '1W', '1M']:
+        F = F.append(L)
+        model_builder_obj.L = L
+        model_builder_obj.F = F
+        #######################################################################################
+        ## Generate all table for L, F and not cross|cross (name of table: model_L_(not)_cross
+        #######################################################################################
+    model_builder_obj = ModelBuilder(F=F, h='30T', L=L, Q='1D', s=None, b='5T')
+    cross = False
+    agg = '1W'
     for _, model_type in enumerate(model_builder_obj.models):
         if model_type:
             model_builder_obj.model_type = model_type
@@ -639,7 +683,7 @@ if __name__ == '__main__':
     fig = px.bar(coefficient, x='params', y='value', color='model', barmode='group')
     fig.show()
     markers_ls = ['orange', 'green', 'blue', 'purple', 'red']
-    markers_dd = {model: markers_ls[i] for i, model in enumerate(model_builder_obj.models)}
+    markers_dd = {model: markers_ls[i-1] for i, model in enumerate(model_builder_obj.models) if model}
     col_grid = 1
     row_grid = 3
     fig = make_subplots(rows=row_grid, cols=col_grid,
