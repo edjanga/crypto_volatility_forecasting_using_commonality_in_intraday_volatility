@@ -6,15 +6,12 @@ from sklearn.preprocessing import LabelEncoder
 import os
 from pytz import timezone
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import time
 import numpy as np
 import copy
 from data_centre.helpers import coin_ls
 import concurrent.futures
-from plotly.subplots import make_subplots
-import plotly.graph_objs as go
 from data_centre.data import Reader
-import torch
 from hottbox.pdtools import pd_to_tensor
 from itertools import product
 from scipy.stats import t
@@ -704,75 +701,11 @@ if __name__ == '__main__':
             coefficient.to_sql(con=model_builder_obj.db_connect_coefficient,
                                name=f'{"_".join(("coefficient",L, cross_name_dd[cross]))}', if_exists='replace')
             print(f'[Insertion]: All tables for {(L, F, cross)} have been inserted into the database.')
+            """
+            Close databases
+            """
+            model_builder_obj.db_connect_r2.close()
+            model_builder_obj.db_connect_mse.close()
+            model_builder_obj.db_connect_qlike()
+            model_builder_obj.db_connect_coefficient()
     pdb.set_trace()
-
-
-    # model_builder_obj = ModelBuilder(F=F, h='30T', L=L, Q='1D', s=None, b='5T')
-    # cross = False
-    # agg = '1W'
-    # for _, model_type in enumerate(model_builder_obj.models):
-    #     if model_type:
-    #         model_builder_obj.model_type = model_type
-    #         print(model_builder_obj.model_type)
-    #         if model_type in ['har', 'har_dummy_markets', 'har_universal']:
-    #             model_builder_obj.add_metrics(df=rv, cross=cross, agg=agg)
-    #         elif model_type == 'har_cdr':
-    #             cdr = data_obj.cdr_read()
-    #             model_builder_obj.add_metrics(df=rv, df2=cdr, cross=cross, agg=agg)
-    #         elif model_type == 'har_csr':
-    #             csr = data_obj.csr_read()
-    #             model_builder_obj.add_metrics(df=rv, df2=csr, cross=cross, agg=agg)
-    # mse = [model_builder_obj.models_rolling_metrics_dd[model]['mse'] for model in
-    #        model_builder_obj.models_rolling_metrics_dd.keys() if model
-    #        and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['mse'], pd.DataFrame)]
-    # mse = pd.concat(mse)
-    # qlike = [model_builder_obj.models_rolling_metrics_dd[model]['qlike'] for model in
-    #          model_builder_obj.models_rolling_metrics_dd.keys() if model
-    #          and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['qlike'], pd.DataFrame)]
-    # qlike = pd.concat(qlike)
-    # r2 = [model_builder_obj.models_rolling_metrics_dd[model]['r2'] for model in
-    #       model_builder_obj.models_rolling_metrics_dd.keys() if model
-    #       and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['r2'], pd.DataFrame)]
-    # r2 = pd.concat(r2)
-    # model_axis_dd = {model: False if model == 'har_universal' else True
-    #                  for _, model in enumerate(model_builder_obj.models)}
-    # coefficient = \
-    #     [pd.DataFrame(model_builder_obj.models_rolling_metrics_dd[model]['coefficient'].mean(axis=model_axis_dd[model]),
-    #                   columns=[model])
-    #      for model in model_builder_obj.models_rolling_metrics_dd.keys() if model
-    #      and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['coefficient'], pd.DataFrame)]
-    # coefficient = pd.concat(coefficient, axis=1)
-    # coefficient = coefficient.loc[~coefficient.index.str.contains('USDT'), :]
-    # model_specific_features = list(set(coefficient.index).difference((set(['const']+F))))
-    # model_specific_features.sort()
-    # coefficient = coefficient.T[['const']+F+model_specific_features].T
-    # coefficient.index.name = 'params'
-    # coefficient = pd.melt(coefficient.reset_index(), value_name='value', var_name='model', id_vars='params')
-    # coefficient.dropna(inplace=True)
-    # import plotly.express as px
-    # fig = px.bar(coefficient, x='params', y='value', color='model', barmode='group')
-    # fig.show()
-    # markers_ls = ['orange', 'green', 'blue', 'purple', 'red']
-    # markers_dd = {model: markers_ls[i-1] for i, model in enumerate(model_builder_obj.models) if model}
-    # col_grid = 1
-    # row_grid = 3
-    # fig = make_subplots(rows=row_grid, cols=col_grid,
-    #                     row_titles=['average R2', 'average MSE', 'average QLIKE'], shared_xaxes=True)
-    # save = False
-    # save_dd = {True: False, False: True}
-    # for i, model in enumerate(model_builder_obj.models):
-    #     if model:
-    #         tmp_df = r2.query(f'model == "{model}"')
-    #         tmp2_df = mse.query(f'model == "{model}"')
-    #         tmp3_df = qlike.query(f'model == "{model}"')
-    #         fig.add_trace(go.Scatter(x=tmp_df.index, y=tmp_df['values'], marker_color=markers_dd[model],
-    #                                  showlegend=True, name=model), row=1, col=1)
-    #         fig.add_trace(go.Scatter(x=tmp2_df.index, y=tmp2_df['values'], marker_color=markers_dd[model],
-    #                                  showlegend=save_dd[save], name=model), row=2, col=1)
-    #         fig.add_trace(go.Scatter(x=tmp3_df.index, y=tmp3_df['values'], showlegend=save_dd[save], name=model,
-    #                                  marker_color=markers_dd[model]), row=3, col=1)
-    #         fig.update_xaxes(tickangle=45, tickformat='%m-%Y')
-    #         fig.update_layout(height=1500, width=1200, title={'text': 'Rolling Metrics'})
-    # if save:
-    #     fig.write_image(os.path.abspath('rolling_metrics_05.png'))
-    # fig.show()
