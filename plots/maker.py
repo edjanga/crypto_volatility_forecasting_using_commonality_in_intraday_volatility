@@ -22,6 +22,7 @@ import pickle
 import swifter
 from sklearn.metrics import pairwise_distances
 import seaborn as sns
+import sqlite3
 
 
 class Plot:
@@ -609,10 +610,92 @@ class Plot:
         self.rv_per_symbol_line()
 
 
+
+class PlotResults:
+
+    db_connect_coefficient = sqlite3.connect(database=os.path.abspath('../data_centre/databases/coefficients.db'))
+    db_connect_mse = sqlite3.connect(database=os.path.abspath('../data_centre/databases/mse.db'))
+    db_connect_qlike = sqlite3.connect(database=os.path.abspath('../data_centre/databases/qlike.db'))
+    db_connect_r2 = sqlite3.connect(database=os.path.abspath('../data_centre/databases/r2.db'))
+
+    def __init__(self):
+        pass
+
+    def coefficient(self, L: str, cross: bool, save: bool):
+        """
+        Query data
+        """
+        cross_dd = {True: 'cross', False: 'not_crossed'}
+        query = f'SELECT * FROM coefficient_{L}_{cross_dd[cross]}'
+        coefficient = pd.read_sql(con=PlotResults.db_connect_coefficient, sql=query, index_col='index')
+        """
+        Plot bar plot
+        """
+        fig_title = f'Coefficient {L} {cross_dd[cross]}: Bar plot'
+        fig = px.bar(coefficient, x='params', y='value', color='model', barmode='group', title=fig_title)
+        if save:
+            fig.write_image(os.path.abspath(f'./coefficient_{L}_{cross_dd[cross]}.png'))
+        fig.show()
+
+    def rolling_metrics(self, L: str, cross: bool, save: bool):
+        cross_dd = {True: 'cross', False: 'not_crossed'}
+        save_dd = {True: False, False: True}
+        """
+        Query data
+        """
+        query = f'SELECT * FROM r2_{L}_{cross_dd[cross]}'
+        r2 = pd.read_sql(con=PlotResults.db_connect_r2, sql=query, index_col='index')
+        query = f'SELECT * FROM mse_{L}_{cross_dd[cross]}'
+        mse = pd.read_sql(con=PlotResults.db_connect_mse, sql=query, index_col='index')
+        query = f'SELECT * FROM qlike_{L}_{cross_dd[cross]}'
+        qlike = pd.read_sql(con=PlotResults.db_connect_qlike, sql=query, index_col='index')
+        models_ls = r2.model.unique().tolist()
+        markers_ls = ['orange', 'green', 'blue', 'purple', 'red']
+        markers_dd = {model: markers_ls[i-1] for i, model in enumerate(models_ls) if model}
+        col_grid = 1
+        row_grid = 3
+        fig = make_subplots(rows=row_grid, cols=col_grid,
+                            row_titles=['average R2', 'average MSE', 'average QLIKE'], shared_xaxes=True)
+        fig_title = f'Rolling metrics {L} {cross}'
+        for i, model in enumerate(models_ls):
+            if model:
+                tmp_df = r2.query(f'model == "{model}"')
+                tmp2_df = mse.query(f'model == "{model}"')
+                tmp3_df = qlike.query(f'model == "{model}"')
+                fig.add_trace(go.Scatter(x=tmp_df.index, y=tmp_df['values'], marker_color=markers_dd[model],
+                                         showlegend=True, name=model), row=1, col=1)
+                fig.add_trace(go.Scatter(x=tmp2_df.index, y=tmp2_df['values'], marker_color=markers_dd[model],
+                                         showlegend=save_dd[save], name=model), row=2, col=1)
+                fig.add_trace(go.Scatter(x=tmp3_df.index, y=tmp3_df['values'], showlegend=save_dd[save], name=model,
+                                         marker_color=markers_dd[model]), row=3, col=1)
+                fig.update_xaxes(tickangle=45, tickformat='%m-%Y')
+                fig.update_layout(height=1500, width=1200, title={'text': fig_title})
+        if save:
+            fig.write_image(os.path.abspath(f'./rolling_metrics_{L}_{cross_dd[cross]}.png'))
+        fig.show()
+
+
 if __name__ == '__main__':
 
-    plot_obj = Plot()
-    plot_obj.metrics_test_market_plots()
-    #plot_obj.tensor_decomposition()
-    #plot_obj.tensor_decomposition(log=True)
+    # plot_obj = Plot()
+    # plot_obj.metrics_test_market_plots()
+    # plot_obj.tensor_decomposition()
+    # plot_obj.tensor_decomposition(log=True)
+    plot_results_obj = PlotResults()
+    for L in ['1D', '1W', '1M']:
+        for cross in [True, False]:
+            plot_results_obj.coefficient(L=L, cross=cross, save=False)
+    """
+        CLose database
+    """
+    plot_results_obj.db_connect_coefficient.close()
+    for L in ['1D', '1W', '1M']:
+        for cross in [True, False]:
+            plot_results_obj.rolling_metrics(L=L, cross=cross, save=False)
+    """
+        Close databases
+    """
+    plot_results_obj.db_connect_r2.close()
+    plot_results_obj.db_connect_mse.close()
+    plot_results_obj.db_connect_qlike.close()
     pdb.set_trace()
