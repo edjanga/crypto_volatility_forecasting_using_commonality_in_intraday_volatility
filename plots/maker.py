@@ -644,11 +644,11 @@ class PlotResults:
         Query data
         """
         query = f'SELECT * FROM r2_{L}_{cross_dd[cross]}'
-        r2 = pd.read_sql(con=PlotResults.db_connect_r2, sql=query, index_col='index')
+        r2 = pd.read_sql(con=PlotResults.db_connect_r2, sql=query, index_col='timestamp')
         query = f'SELECT * FROM mse_{L}_{cross_dd[cross]}'
-        mse = pd.read_sql(con=PlotResults.db_connect_mse, sql=query, index_col='index')
+        mse = pd.read_sql(con=PlotResults.db_connect_mse, sql=query, index_col='timestamp')
         query = f'SELECT * FROM qlike_{L}_{cross_dd[cross]}'
-        qlike = pd.read_sql(con=PlotResults.db_connect_qlike, sql=query, index_col='index')
+        qlike = pd.read_sql(con=PlotResults.db_connect_qlike, sql=query, index_col='timestamp')
         models_ls = r2.model.unique().tolist()
         markers_ls = ['orange', 'green', 'blue', 'purple', 'red']
         markers_dd = {model: markers_ls[i-1] for i, model in enumerate(models_ls) if model}
@@ -656,7 +656,7 @@ class PlotResults:
         row_grid = 3
         fig = make_subplots(rows=row_grid, cols=col_grid,
                             row_titles=['average R2', 'average MSE', 'average QLIKE'], shared_xaxes=True)
-        fig_title = f'Rolling metrics {L} {cross}'
+        fig_title = f'Rolling metrics {L} {cross_dd[cross]}'
         for i, model in enumerate(models_ls):
             if model:
                 tmp_df = r2.query(f'model == "{model}"')
