@@ -1,14 +1,13 @@
 import glob
 import os.path
 import pdb
-import typing
 import torch
 import pandas as pd
 from data_centre.helpers import coin_ls
+from data_centre.data import Reader
 from plotly.subplots import make_subplots
 import plotly.express as px
 import plotly.graph_objs as go
-from plotly.tools import mpl_to_plotly
 from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
@@ -617,11 +616,14 @@ class PlotResults:
     db_connect_mse = sqlite3.connect(database=os.path.abspath('../data_centre/databases/mse.db'))
     db_connect_qlike = sqlite3.connect(database=os.path.abspath('../data_centre/databases/qlike.db'))
     db_connect_r2 = sqlite3.connect(database=os.path.abspath('../data_centre/databases/r2.db'))
+    db_connect_y = sqlite3.connect(database=os.path.abspath('../data_centre/databases/y.db'))
+    db_connect_correlation = sqlite3.connect(database=os.path.abspath('../data_centre/databases/correlation.db'))
 
     def __init__(self):
         pass
 
-    def coefficient(self, L: str, cross: bool, save: bool):
+    @staticmethod
+    def coefficient(L: str, cross: bool, save: bool):
         """
         Query data
         """
@@ -637,7 +639,8 @@ class PlotResults:
             fig.write_image(os.path.abspath(f'./coefficient_{L}_{cross_dd[cross]}.png'))
         fig.show()
 
-    def rolling_metrics(self, L: str, cross: bool, save: bool):
+    @staticmethod
+    def rolling_metrics(L: str, cross: bool, save: bool):
         cross_dd = {True: 'cross', False: 'not_crossed'}
         save_dd = {True: False, False: True}
         """
@@ -674,28 +677,180 @@ class PlotResults:
             fig.write_image(os.path.abspath(f'./rolling_metrics_{L}_{cross_dd[cross]}.png'))
         fig.show()
 
+    @staticmethod
+    def rolling_metrics_barplot(L: str, cross: bool, save: bool):
+        cross_dd = {True: 'cross', False: 'not_crossed'}
+        """
+        Query data
+        """
+        query = f'SELECT * FROM r2_{L}_{cross_dd[cross]}'
+        r2 = pd.read_sql(con=PlotResults.db_connect_r2, sql=query, index_col='timestamp')
+        query = f'SELECT * FROM mse_{L}_{cross_dd[cross]}'
+        mse = pd.read_sql(con=PlotResults.db_connect_mse, sql=query, index_col='timestamp')
+        query = f'SELECT * FROM qlike_{L}_{cross_dd[cross]}'
+        qlike = pd.read_sql(con=PlotResults.db_connect_qlike, sql=query, index_col='timestamp')
+        r2 = \
+            r2.groupby(by='model').agg(['mean', lambda x: x.quantile(.5),
+                                        lambda x: x.quantile(.25), lambda x: x.quantile(.75)])
+        r2.columns = ['mean', 'median', '25th_percentile', '75th_percentile']
+        r2 = pd.melt(r2, var_name='stats', value_name='value', ignore_index=False).reset_index()
+        r2 = r2.assign(metric='r2')
+        mse = \
+            mse.groupby(by='model').agg(['mean', lambda x: x.quantile(.5),
+                                        lambda x: x.quantile(.25), lambda x: x.quantile(.75)])
+        mse.columns = ['mean', 'median', '25th_percentile', '75th_percentile']
+        mse = pd.melt(mse, var_name='stats', value_name='value', ignore_index=False).reset_index()
+        mse = mse.assign(metric='mse')
+        qlike = \
+            qlike.groupby(by='model').agg(['mean', lambda x: x.quantile(.5),
+                                        lambda x: x.quantile(.25), lambda x: x.quantile(.75)])
+        qlike.columns = ['mean', 'median', '25th_percentile', '75th_percentile']
+        qlike = pd.melt(qlike, var_name='stats', value_name='value', ignore_index=False).reset_index()
+        qlike = qlike.assign(metric='qlike')
+        metrics = pd.concat([r2, mse, qlike])
+        """
+            Plot bar plot
+        """
+        col_grid = 1
+        metrics_ls = metrics.metric.unique().tolist()
+        models_ls = metrics.model.unique().tolist()
+        row_grid = len(metrics_ls)
+        colors_ls = px.colors.qualitative.Plotly
+        fig = make_subplots(rows=row_grid, cols=col_grid,
+                            row_titles=['R2', 'MSE', 'QLIKE'], shared_xaxes=True)
+        for i, metric in enumerate(metrics_ls):
+            subfig = go.Figure()
+            tmp_df = metrics.query(f'metric == "{metric}"')
+            data_bar_plot_ls = \
+                [go.Bar(name=stats,
+                        marker_color=colors_ls[j],
+                        showlegend=i==i,
+                        x=models_ls,
+                        y=tmp_df.query(f'stats == "{stats}"').value.values.tolist())
+                 for j, stats in enumerate(['25th_percentile', 'mean', 'median', '75th_percentile'])]
+            for k, bar in enumerate(data_bar_plot_ls):
+                subfig.add_trace(bar)
+                fig.add_trace(subfig.data[k], row=i+1, col=1)
+        fig_title = f'Rolling metrics {L} {cross_dd[cross]}: Bar plot'
+        fig.update_layout(height=900, width=1200, title={'text': fig_title}, barmode='group')
+        if save:
+            fig.write_image(os.path.abspath(f'./rolling_metrics_bar_plot_{L}_{cross_dd[cross]}.png'))
+        fig.show()
+
+    @staticmethod
+    def scatterplot(L: str, cross: bool, save: bool):
+        cross_dd = {True: 'cross', False: 'not_crossed'}
+        """
+        Query data
+        """
+        query = f'SELECT * FROM y_{L}_{cross_dd[cross]}'
+        y = pd.read_sql(con=PlotResults.db_connect_y, sql=query, index_col='timestamp')
+        y.index = pd.to_datetime(y.index)
+        models_ls = y.model.unique().tolist()
+        col_grid = 1
+        row_grid = len(models_ls) + 1
+        fig = make_subplots(rows=row_grid, cols=col_grid, row_titles=models_ls)
+        fig_title = f'Scatter plot - {L} {cross_dd[cross]}'
+        for i, model in enumerate(models_ls):
+            if model:
+                tmp_df = y.query(f'model == "{model}"')
+                tmp_df = tmp_df.resample('30T').last()
+                fig.add_trace(go.Scatter(x=tmp_df.y, y=tmp_df.y_hat, showlegend=True, name=model,
+                                         mode='markers'), row=i+1, col=1)
+        fig.update_layout(height=1500, width=1200, title={'text': fig_title})
+        if save:
+            fig.write_image(os.path.abspath(f'./scatter_plot_{L}_{cross_dd[cross]}.png'))
+        fig.show()
+
+    @staticmethod
+    def distribution(L: str, cross: bool, save: bool):
+        cross_dd = {True: 'cross', False: 'not_crossed'}
+        colors_ls = px.colors.qualitative.Plotly
+        """
+        Query data
+        """
+        query = f'SELECT * FROM y_{L}_{cross_dd[cross]}'
+        y = pd.read_sql(con=PlotResults.db_connect_y, sql=query, index_col='timestamp')
+        y.index = pd.to_datetime(y.index)
+        models_ls = y.model.unique().tolist()
+        col_grid = 1
+        row_grid = len(models_ls) + 1
+        fig = make_subplots(rows=row_grid, cols=col_grid, row_titles=models_ls)
+        fig_title = f'Distributions - {L} {cross_dd[cross]}'
+        for i, model in enumerate(models_ls):
+            if model:
+                tmp_df = y.query(f'model == "{model}"')
+                tmp_df = tmp_df.resample('30T').last()
+                fig.add_trace(go.Histogram(x=tmp_df.y, showlegend=True,
+                                           name='_'.join((model, 'y')),marker_color=colors_ls[0]), row=i+1, col=1)
+                fig.add_trace(go.Histogram(x=tmp_df.y_hat, showlegend=True,
+                                           name='_'.join((model, 'y_hat')), marker_color=colors_ls[1]), row=i+1, col=1)
+        fig.update_layout(height=1500, width=1200, title={'text': fig_title})
+        fig.update_layout(barmode='overlay')
+        fig.update_traces(opacity=0.75)
+        if save:
+            fig.write_image(os.path.abspath(f'./distributions_y_vs_y_hat{L}_{cross_dd[cross]}.png'))
+        fig.show()
+
 
 if __name__ == '__main__':
 
-    # plot_obj = Plot()
-    # plot_obj.metrics_test_market_plots()
-    # plot_obj.tensor_decomposition()
-    # plot_obj.tensor_decomposition(log=True)
-    plot_results_obj = PlotResults()
-    for L in ['1D', '1W', '1M']:
-        for cross in [True, False]:
-            plot_results_obj.coefficient(L=L, cross=cross, save=False)
-    """
-        CLose database
-    """
-    plot_results_obj.db_connect_coefficient.close()
-    for L in ['1D', '1W', '1M']:
-        for cross in [True, False]:
-            plot_results_obj.rolling_metrics(L=L, cross=cross, save=False)
-    """
-        Close databases
-    """
-    plot_results_obj.db_connect_r2.close()
-    plot_results_obj.db_connect_mse.close()
-    plot_results_obj.db_connect_qlike.close()
-    pdb.set_trace()
+    # plot_results_obj = PlotResults()
+    # for L in ['1D', '1W', '1M']:
+    #     for cross in [False]:
+    #         plot_results_obj.rolling_metrics_barplot(L=L, cross=cross, save=False)
+    # for L in ['1D', '1W', '1M']:
+    #     for cross in [False]:
+    #         plot_results_obj.scatterplot(L=L, cross=cross, save=False)
+    # for L in ['1D', '1W', '1M']:
+    #     for cross in [False]:
+    #         plot_results_obj.distribution(L=L, cross=cross, save=False)
+    # pdb.set_trace()
+    # for L in ['1D', '1W', '1M']:
+    #     for cross in [False]:
+    #         plot_results_obj.coefficient(L=L, cross=cross, save=False)
+    # """
+    #     CLose database
+    # """
+    # plot_results_obj.db_connect_coefficient.close()
+    # for L in ['1D', '1W', '1M']:
+    #     for cross in [False]:
+    #         plot_results_obj.rolling_metrics(L=L, cross=cross, save=False)
+    # """
+    #     Close databases
+    # """
+    # plot_results_obj.db_connect_r2.close()
+    # plot_results_obj.db_connect_mse.close()
+    # plot_results_obj.db_connect_qlike.close()
+    # plot_results_obj.db_connect_y.close()
+    # pdb.set_trace()
+    def box_plot(cutoff_low: float = .01, cutoff_high: float = .01, save: bool=False):
+        reader_obj = Reader(file=os.path.abspath('../data_centre/tmp/aggregate2022'))
+        rv_raw = reader_obj.rv_read(raw=True, cutoff_low=cutoff_low, cutoff_high=cutoff_high)
+        rv = reader_obj.rv_read(raw=False)
+        rv_dd = {0: rv_raw, 1: rv}
+        row_grid = 2
+        col_grid = 1
+        fig = make_subplots(rows=row_grid, cols=col_grid, row_titles=['raw', 'winsorised'])
+        fig_title = 'Box plot: Realised volatility - Raw and Winsorised'
+        for row in range(0, row_grid):
+            tmp = rv_dd[row]
+            for token in tmp.columns:
+                fig.add_trace(go.Box(y=tmp[token].values, name=token), row=row+1, col=1)
+        fig.update_layout(height=900, width=1200, title={'text': fig_title}, showlegend=False)
+        if save:
+            fig.write_image(os.path.abspath(f'./box_plot_rv.png'))
+        fig.show()
+        pdb.set_trace()
+
+    def correlation(save: bool=False):
+        query = 'SELECT * FROM correlation'
+        correlation = pd.read_sql(con=PlotResults.db_connect_correlation, sql=query, index_col='timestamp')
+        fig = px.line(correlation, y='value', color='lookback_window', title='Correlation plot')
+        fig.update_xaxes(tickangle=45, tickformat='%m-%Y')
+        fig.update_layout(xaxis_title='')
+        if save:
+            fig.write_image(os.path.abspath(f'./correlation.png'))
+        fig.show()
+        pdb.set_trace()
+    correlation()
