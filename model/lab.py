@@ -5,6 +5,7 @@ import pandas as pd
 import pytz
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import r2_score, mean_squared_error
 import os
 from pytz import timezone
 from dataclasses import dataclass
@@ -20,8 +21,12 @@ from hottbox.pdtools import pd_to_tensor
 from itertools import product
 from scipy.stats import t
 import sqlite3
+import matplotlib.pyplot as plt
+from datetime import datetime
+
 
 """Functions used to facilitate computation within classes."""
+qlike_score = lambda x: ((x.iloc[:, 0].div(x.iloc[:, -1]))-np.log(x.iloc[:, 0].div(x.iloc[:, -1]))-1).mean()
 
 
 def group_members_external_df(df: pd.DataFrame, df2: pd.DataFrame, drop_symbol: bool=True) -> pd.DataFrame:
@@ -42,11 +47,14 @@ class Market:
 
 
 class FeatureBuilderBase:
-
+    #pd.DateOffset(hours=1))
     """Lookback windows smaller than 1D are dynamic while the rest is static"""
-    _lookback_window_dd = dict([('1H', pd.DateOffset(hours=1)), ('6H', pd.DateOffset(hours=6)),
-                                ('12H', pd.DateOffset(hours=12)), ('1D', pd.DateOffset(days=1)),
-                                ('1W', lambda x:x.resample('W').last()), ('1M', lambda x:x.resample('M').last())])
+    _lookback_window_dd = dict([('1H', pd.to_timedelta('1H')//pd.to_timedelta('5T')),
+                                ('6H', pd.to_timedelta('6H')//pd.to_timedelta('5T')),
+                                ('12H', pd.to_timedelta('12H')//pd.to_timedelta('5T')),
+                                ('1D', pd.to_timedelta('1D')//pd.to_timedelta('5T')),
+                                ('1W', lambda x:x.resample('W').mean()), ('1M', lambda x:x.resample('M').mean())])
+
 
     _5min_buckets_lookback_window_dd = \
         {lookback: pd.to_timedelta(lookback) // pd.to_timedelta('5T') for
@@ -61,7 +69,6 @@ class FeatureBuilderBase:
     @property
     def name(self):
         return self._name
-
 
     def builder(self, symbol: typing.Union[typing.Tuple[str], str], df: pd.DataFrame, F: typing.List[str]):
         """To be overwritten by each child class"""
@@ -82,7 +89,7 @@ class FeatureHAR(FeatureBuilderBase):
         for _, lookback in enumerate(F):
             if self._5min_buckets_lookback_window_dd[lookback] <= 288:
                 offset = self._lookback_window_dd[lookback]
-                symbol_df = symbol_df.join(symbol_df[[symbol[-1]]].shift(1, freq=offset), how='left',
+                symbol_df = symbol_df.join(symbol_df[[symbol[-1]]].shift(offset), how='left',
                                            rsuffix=f'_{lookback}')
             else:
                 symbol_df = symbol_df.join(symbol_df[[symbol[-1]]].apply(self._lookback_window_dd[lookback]).shift(1),
@@ -111,7 +118,7 @@ class FeatureHARDummy(FeatureBuilderBase):
         for _, lookback in enumerate(F):
             if self._5min_buckets_lookback_window_dd[lookback] <= 288:
                 offset = self._lookback_window_dd[lookback]
-                symbol_df = symbol_df.join(symbol_df[[symbol[-1]]].shift(1, freq=offset), how='left',
+                symbol_df = symbol_df.join(symbol_df[[symbol[-1]]].shift(offset), how='left',
                                            rsuffix=f'_{lookback}')
             else:
                 symbol_df = symbol_df.join(symbol_df[[symbol[-1]]].apply(self._lookback_window_dd[lookback]).shift(1),
@@ -159,7 +166,7 @@ class FeatureHARCDR(FeatureBuilderBase):
         for _, lookback in enumerate(F):
             if self._5min_buckets_lookback_window_dd[lookback] <= 288:
                 offset = self._lookback_window_dd[lookback]
-                symbol_rv_df = symbol_rv_df.join(symbol_rv_df[[symbol[-1]]].shift(1, freq=offset), how='left',
+                symbol_rv_df = symbol_rv_df.join(symbol_rv_df[[symbol[-1]]].shift(offset), how='left',
                                                  rsuffix=f'_{lookback}')
             else:
                 symbol_rv_df = \
@@ -187,9 +194,9 @@ class FeatureHARCSR(FeatureBuilderBase):
         for _, lookback in enumerate(F):
             if self._5min_buckets_lookback_window_dd[lookback] <= 288:
                 offset = self._lookback_window_dd[lookback]
-                symbol_rv_df = symbol_rv_df.join(symbol_rv_df[[symbol[-1]]].shift(1, freq=offset), how='left',
+                symbol_rv_df = symbol_rv_df.join(symbol_rv_df[[symbol[-1]]].shift(offset), how='left',
                                                  rsuffix=f'_{lookback}')
-                symbol_csr_df = symbol_csr_df.join(symbol_csr_df[[symbol[-1]]].shift(1, freq=offset), how='left',
+                symbol_csr_df = symbol_csr_df.join(symbol_csr_df[[symbol[-1]]].shift(offset), how='left',
                                                    rsuffix=f'_{lookback}')
             else:
                 symbol_rv_df = \
@@ -200,7 +207,6 @@ class FeatureHARCSR(FeatureBuilderBase):
                                        how='left', rsuffix=f'_{lookback}')
         symbol_rv_df.ffill(inplace=True)
         symbol_rv_df.dropna(inplace=True)
-        symbol_csr_df.drop(symbol[-1], axis=1, inplace=True)
         symbol_csr_df.ffill(inplace=True)
         symbol_csr_df.dropna(inplace=True)
         symbol_rv_df = symbol_rv_df.join(symbol_csr_df, how='left', rsuffix='_CSR')
@@ -223,7 +229,7 @@ class FeatureHARUniversal(FeatureBuilderBase):
             for _, lookback in enumerate(F):
                 if self._5min_buckets_lookback_window_dd[lookback] <= 288:
                     offset = self._lookback_window_dd[lookback]
-                    symbol_rv_df = symbol_rv_df.join(symbol_rv_df[[symbol]].shift(1, freq=offset), how='left',
+                    symbol_rv_df = symbol_rv_df.join(symbol_rv_df[[symbol]].shift(offset), how='left',
                                                      rsuffix=f'_{lookback}')
                 else:
                     symbol_rv_df = \
@@ -250,14 +256,17 @@ class ModelBuilder:
                               'har_csr': FeatureHARCSR(),
                               'har_universal': FeatureHARUniversal()}
     _factory_regression_dd = {'linear': LinearRegression()}
+    factor = 100_000
     _factory_transformation_dd = {'log': {'transformation': np.log, 'inverse': np.exp},
-                                  None: {'transformation': lambda x: x, 'inverse': lambda x: x}}
+                                  None: {'transformation': lambda x: x, 'inverse': lambda x: x},
+                                  'scalar': {'transformation': lambda x: x*ModelBuilder.factor,
+                                             'inverse': lambda x: x/ModelBuilder.factor}}
     models = [None, 'har', 'har_dummy_markets', 'har_csr', 'har_cdr', 'har_universal']
     models_rolling_metrics_dd = {model: dict([('qlike', {}), ('r2', {}), ('mse', {}),
                                               ('tstats', {}), ('pvalues', {}), ('coefficient', {})])
                                  for _, model in enumerate(models) if model}
-    _coins = coin_ls[:2]#coin_ls[:7]+coin_ls[13:] #'matic', 'doge', 'ftm', 'avax'
-    print(_coins)
+    models_forecast_dd = {model: list() for _, model in enumerate(models) if model}
+    _coins = coin_ls[:7]+coin_ls[13:] #'matic', 'doge', 'ftm', 'avax'
     _coins = [''.join((coin, 'usdt')).upper() for _, coin in enumerate(_coins)]
     _pairs = list(product(_coins, repeat=2))
     _pairs = [(syms[0], syms[-1]) for _, syms in enumerate(_pairs)]
@@ -265,6 +274,8 @@ class ModelBuilder:
     db_connect_mse = sqlite3.connect(database=os.path.abspath('../data_centre/databases/mse.db'))
     db_connect_qlike = sqlite3.connect(database=os.path.abspath('../data_centre/databases/qlike.db'))
     db_connect_r2 = sqlite3.connect(database=os.path.abspath('../data_centre/databases/r2.db'))
+    db_connect_y = sqlite3.connect(database=os.path.abspath('../data_centre/databases/y.db'))
+    db_connect_correlation = sqlite3.connect(database=os.path.abspath('../data_centre/databases/correlation.db'))
 
     def __init__(self, h: str, F: typing.List[str], L: str, Q: str, model_type: str=None, s=None, b: str='5T'):
         """
@@ -366,6 +377,30 @@ class ModelBuilder:
     def model_type(self, model_type: str):
         self._model_type = model_type
 
+    def correlation(self, cutoff_low: float = .01, cutoff_high: float = .01, insert: bool=True) \
+            -> typing.Union[None, pd.DataFrame]:
+        correlation_dd = dict()
+        reader_obj = Reader(file=os.path.abspath('../data_centre/tmp/aggregate2022'))
+        returns = reader_obj.returns_read(raw=False, cutoff_low=cutoff_low, cutoff_high=cutoff_high)
+        for L in ['1D', '1W', '1M']:
+            window = pd.to_timedelta('30D') // pd.to_timedelta('5T') if \
+                L == '1M' else pd.to_timedelta(L) // pd.to_timedelta('5T')
+            correlation = \
+                returns.rolling(window=window).corr().dropna().droplevel(axis=0, level=1).mean(axis=1)
+            correlation = correlation.groupby(by=correlation.index).mean()
+            correlation = correlation.resample('1D').mean()
+            correlation.name = L
+            correlation_dd[L] = correlation
+        correlation = pd.DataFrame(correlation_dd)
+        correlation = pd.melt(frame=correlation, value_name='value', var_name='lookback_window', ignore_index=False)
+        if insert:
+            print(f'[Insertion]: Correlation table...............................')
+            correlation.to_sql(name='correlation', con=ModelBuilder.db_connect_correlation, if_exists='replace')
+            print(f'[Insertion]: Correlation table is not completed.')
+            return
+        else:
+            return correlation
+
     def rolling_metrics(self, symbol: typing.Union[typing.Tuple[str], str], regression_type: str='linear',
                         transformation=None, **kwargs) -> typing.Tuple[pd.Series]:
         L_shift_dd = {'1D': pd.DateOffset(days=1), '1W': pd.DateOffset(weeks=1), '1M': pd.DateOffset(months=1)}
@@ -382,10 +417,13 @@ class ModelBuilder:
                 data = model_obj.builder(symbol=symbol, df=kwargs['df'], F=self._F, df2=kwargs['df2'])
             elif self._model_type == 'har_universal':
                 data = model_obj.builder(df=kwargs['df'], F=self._F)
-        data = \
-            pd.DataFrame(data=
-                         np.vectorize(ModelBuilder._factory_transformation_dd[transformation]['transformation'])
-                         (data.values), index=data.index, columns=data.columns)
+        try:
+            data = \
+                pd.DataFrame(
+                    data=np.vectorize(ModelBuilder._factory_transformation_dd[transformation]['transformation'])
+                    (data.values), index=data.index, columns=data.columns)
+        except ValueError:
+            pdb.set_trace()
         endog = data.pop(symbol[0]) if self._model_type != 'har_universal' else data.pop('RV')
         endog.replace(0, np.nan, inplace=True)
         endog.ffill(inplace=True)
@@ -401,8 +439,6 @@ class ModelBuilder:
         idx_ls = set(exog.index) if self._model_type != 'har_universal' else set(exog.index.get_level_values(0))
         idx_ls = list(idx_ls)
         idx_ls.sort()
-        # columns_length_dd = \
-        #     {model_type: list(range(exog.shape[1]+1)) for _, model_type in enumerate(self.models) if model_type}
         columns_name = \
             ['const'] + exog.columns.tolist() if self._model_type != \
             'har_universal' else ['const'] + ['_'.join(('RV', F)) for _, F in enumerate(self._F)]
@@ -410,8 +446,6 @@ class ModelBuilder:
         tstats = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_name)
         pvalues = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_name)
         if self._model_type != 'har_universal':
-            # coefficient_update = \
-            #     exog.loc[:(exog.index[-1].date() - start_dd[self._L]).strftime('%Y-%m-%d'), :].index
             coefficient_update = exog.index
         else:
             exog_tmp = \
@@ -422,11 +456,14 @@ class ModelBuilder:
                                  group_keys=True).apply(lambda x: x.droplevel(1).shift(1, freq=L_shift_dd[self._L]))
             coefficient_update = exog_tmp.index.get_level_values(1).unique()
         coefficient_update = coefficient_update[::pd.to_timedelta(self._Q)//pd.to_timedelta(self._b)]
-        mse = list()
-        qlike = list()
-        r2_num = list()
-        r2_denom = list()
-        for date in coefficient_update[1:-2]:
+        # mse = list()
+        # qlike = list()
+        # r2 = list()
+        y = list()
+        left_date = \
+            (pd.to_timedelta(self._L)//pd.to_timedelta('1D')) if self._L != '1M' \
+                else (pd.to_timedelta('30D')//pd.to_timedelta('1D'))
+        for date in coefficient_update[left_date:-1]:
             start = pd.to_datetime(date) - start_dd[self._L]
             start = pd.to_datetime(start, utc=True)
             if self._model_type != 'har_universal':
@@ -437,47 +474,48 @@ class ModelBuilder:
                                             (exog.index.get_level_values(0) < pd.to_datetime(date, utc=True))],\
                     endog.loc[(endog.index.get_level_values(0) >= start) &
                               (endog.index.get_level_values(0) < pd.to_datetime(date, utc=True))]
+            X_train.dropna(inplace=True)
+            y_train.dropna(inplace=True)
+            X_train = X_train.apply(lambda x: winsorize(x, (.1, .1)))
+            y_train = pd.Series(data=winsorize(y_train, (.1, .1)), index=y_train.index, name=y_train.name)
             rres = regression.fit(X_train, y_train)
             coefficient.loc[date, :] = np.concatenate((np.array([rres.intercept_]), rres.coef_))
             """Test set"""
             test_date = (pd.to_datetime(date) + start_dd['1D']).date()
             X_test, y_test = exog.loc[test_date.strftime('%Y-%m-%d'), :], endog.loc[test_date.strftime('%Y-%m-%d')]
             X_test = X_test.assign(const=1)
-            X_test = X_test.loc[X_test.index[::pd.to_timedelta(self._h)//pd.to_timedelta(self._b)], :]
-            y_test = y_test.loc[y_test.index[::pd.to_timedelta(self._h)//pd.to_timedelta(self._b)]]
-            X_test = pd.DataFrame(data=np.multiply(X_test.values, coefficient.loc[date, X_test.columns].values),
-                                  columns=columns_name, index=X_test.index)
-            y_hat = X_test.sum(axis=1)
+            X_test = X_test.apply(lambda x: winsorize(x, (.1, .1)))
+            y_test = pd.Series(data=winsorize(y_test, (.1, .1)), index=y_test.index, name=y_test.name)
+            y_hat = \
+                pd.DataFrame(data=np.multiply(X_test.values,
+                                              coefficient.loc[date, X_test.columns.tolist()].values),
+                             columns=columns_name, index=X_test.index)
+            y_hat = y_hat.sum(axis=1)
             y_hat = \
                 pd.Series(data=
                           y_hat.apply(lambda x: ModelBuilder._factory_transformation_dd[transformation]['inverse'](x)),
                           index=y_hat.index)
-            mse.append((y_hat.sub(y_test)**2))
-            qlike.append(y_test.div(y_hat)-np.log(y_test.div(y_hat))-1)
-            r2_num.append((y_hat.sub(y_test)**2))
-            r2_denom.append((y_test.sub(y_test.mean()))**2)
-            X_train = pd.concat([pd.Series(1.0, index=X_train.index, name='const'), X_train], axis=1)
+            y_test = \
+                pd.Series(data=
+                          y_test.apply(lambda x: ModelBuilder._factory_transformation_dd[transformation]['inverse'](x)),
+                          index=y_test.index)
+            y.append(pd.concat([y_test, y_hat], axis=1))
             """Tstats"""
             tstats.loc[date, :] = \
                 coefficient.loc[date, :].div((np.diag(np.matmul(X_test.values.transpose(),
                                                                 X_test.values))/np.sqrt(X_test.shape[0])))
             """Pvalues"""
             pvalues.loc[date, :] = 2*(1-t.cdf(tstats.loc[date, :].values, df=X_train.shape[0]-coefficient.shape[1]-1))
-        mse = pd.concat(mse).resample('1D').mean() if self._model_type != 'har_universal' else \
-            pd.concat(mse).groupby(by=[pd.Grouper(level=-1), pd.Grouper(freq='1D', level=0)]).mean().groupby(
-                by=[pd.Grouper(freq='1D', level=-1)]).mean()
+        y = pd.concat(y)
+        ModelBuilder.models_forecast_dd[self._model_type].append(y)
+        tmp = y.groupby(by=pd.Grouper(level=0, freq='1D')) if \
+            self._model_type != 'har_universal' else \
+            y.groupby(by=[pd.Grouper(level=-1), pd.Grouper(level=0, freq='1D')])
+        mse = tmp.apply(lambda x: mean_squared_error(x.iloc[:, 0], x.iloc[:, -1]))
         mse = pd.Series(mse, name=symbol)
-        qlike = pd.concat(qlike).resample('1D').mean() if self._model_type != 'har_universal' else \
-            pd.concat(qlike).groupby(by=[pd.Grouper(level=-1), pd.Grouper(freq='1D', level=0)]).mean().groupby(
-                by=[pd.Grouper(freq='1D', level=-1)]).mean()
+        qlike = tmp.apply(qlike_score)
         qlike = pd.Series(qlike, name=symbol)
-        r2_num = pd.concat(r2_num).resample('1D').sum() if self._model_type != 'har_universal' else \
-            pd.concat(r2_num).groupby(by=[pd.Grouper(level=-1), pd.Grouper(freq='1D', level=0)]).mean().groupby(
-                by=[pd.Grouper(freq='1D', level=-1)]).mean()
-        r2_denom = pd.concat(r2_denom).resample('1D').sum() if self._model_type != 'har_universal' else \
-            pd.concat(r2_denom).groupby(by=[pd.Grouper(level=-1), pd.Grouper(freq='1D', level=0)]).mean()
-        r2 = 1 - r2_num.div(r2_denom) if self._model_type != 'har_universal' else (1 - r2_num.div(r2_denom)).groupby(
-                by=[pd.Grouper(freq='1D', level=-1)]).mean()
+        r2 = tmp.apply(lambda x: r2_score(x.iloc[:, 0], x.iloc[:, -1]))
         r2 = pd.Series(r2, name=symbol)
         coefficient.ffill(inplace=True)
         coefficient.dropna(inplace=True)
@@ -495,8 +533,11 @@ class ModelBuilder:
             if self._model_type != 'har_universal' else pvalues.columns.str.replace('_'.join(('RV', '')), '')
         return mse, qlike, r2, coefficient, tstats, pvalues
 
-    def add_metrics(self, regression_type: str='linear', transformation=None, cross: bool=False,
-                    agg: str=None, **kwargs) -> None:
+    @staticmethod
+    def reinitialise_models_forecast_dd():
+        ModelBuilder.models_forecast_dd = {model: list() for _, model in enumerate(ModelBuilder.models) if model}
+
+    def add_metrics(self, regression_type: str='linear', transformation=None, cross: bool=False, **kwargs) -> None:
         if self._model_type != 'har_universal':
             coin_ls = set(self._coins).intersection(set(kwargs['df'].columns))
             coin_ls = list(coin_ls)
@@ -549,6 +590,12 @@ class ModelBuilder:
             coefficient_dd['coefficient'] = coefficient
             tstats_dd['tstats'] = tstats
             pvalues_dd['pvalues'] = pvalues
+        ModelBuilder.models_forecast_dd[self._model_type] = \
+            [df.rename(columns={df.columns[0]: 'y', df.columns[1]: 'y_hat'}) for df in
+             ModelBuilder.models_forecast_dd[self._model_type]]
+        y = pd.concat(ModelBuilder.models_forecast_dd[self._model_type])
+        y = y.assign(model=self._model_type)
+        ModelBuilder.models_forecast_dd[self._model_type] = y
         ModelBuilder.remove_redundant_key(mse_dd)
         ModelBuilder.remove_redundant_key(qlike_dd)
         ModelBuilder.remove_redundant_key(r2_dd)
@@ -558,19 +605,24 @@ class ModelBuilder:
         r2 = pd.DataFrame(r2_dd).mean(axis=1)
         r2.name = 'values'
         r2 = pd.DataFrame(r2)
-        r2 = r2.assign(model=self._model_type)
         mse = pd.DataFrame(mse_dd).mean(axis=1)
         mse.name = 'values'
         mse = pd.DataFrame(mse)
-        mse = mse.assign(model=self._model_type)
         qlike = pd.DataFrame(qlike_dd).mean(axis=1)
         qlike.name = 'values'
         qlike = pd.DataFrame(qlike)
+        r2 = \
+            r2 if self._model_type != 'har_universal' else \
+                r2.groupby(by=[pd.Grouper(level=-1),
+                               pd.Grouper(level=0)], group_keys=True).mean().groupby(by=pd.Grouper(level=0)).mean()
+        r2 = r2.assign(model=self._model_type)
+        mse = mse if self._model_type != 'har_universal' else \
+            mse.groupby(by=[pd.Grouper(level=-1), pd.Grouper(level=0)],
+                        group_keys=True).mean().groupby(by=pd.Grouper(level=0)).mean()
+        mse = mse.assign(model=self._model_type)
+        qlike = qlike if self._model_type != 'har_universal' else qlike.groupby(by=[pd.Grouper(level=-1),
+                pd.Grouper(level=0)], group_keys=True).mean().groupby(by=pd.Grouper(level=0)).mean()
         qlike = qlike.assign(model=self._model_type)
-        agg_dd = {None: '3H', agg: agg}
-        r2 = r2.resample(agg_dd[agg]).agg({'values': 'mean', 'model': 'first'})
-        mse = mse.resample(agg_dd[agg]).agg({'values': 'mean', 'model': 'first'})
-        qlike = qlike.resample(agg_dd[agg]).agg({'values': 'mean', 'model': 'first'})
         ModelBuilder.models_rolling_metrics_dd[self._model_type]['mse'] = mse
         ModelBuilder.models_rolling_metrics_dd[self._model_type]['qlike'] = qlike
         ModelBuilder.models_rolling_metrics_dd[self._model_type]['r2'] = r2
@@ -609,81 +661,94 @@ class TensorDecomposition:
 
 
 if __name__ == '__main__':
-
     data_obj = Reader(file='../data_centre/tmp/aggregate2022')
-    rv = data_obj.rv_read(cutoff_low=.05, cutoff_high=.05)
+    rv = data_obj.rv_read()
     cdr = data_obj.cdr_read()
     csr = data_obj.csr_read()
     F = ['1H', '6H', '12H']
-    model_builder_obj = ModelBuilder(F=F, h='30T', L='1D', Q='1D', s=None, b='5T')
-    agg = '1D'
-    cross_name_dd = {True: 'cross', False: 'not_crossed'}
-    for L in ['1D', '1W', '1M']:
-        F.append(L)
-        model_builder_obj.L = L
-        model_builder_obj.F = F
-        for cross in [False, True]:
-            print(f'[Computation]: Compute all tables for {(L, F, cross)}...')
-            """
-            Generate all tables for L, F and not cross|cross (name of table: L_(not)_cross
-            """
-            for _, model_type in enumerate(model_builder_obj.models):
-                if model_type:
-                    model_builder_obj.model_type = model_type
-                    print(model_builder_obj.model_type)
-                    if model_type in ['har', 'har_dummy_markets', 'har_universal']:
-                        if cross & (model_type == 'har_universal'):
-                            pass
-                        else:
-                            model_builder_obj.add_metrics(df=rv, cross=cross, agg=agg)
-                    elif model_type == 'har_cdr':
-                        model_builder_obj.add_metrics(df=rv, df2=cdr, cross=cross, agg=agg)
-                    elif model_type == 'har_csr':
-                        model_builder_obj.add_metrics(df=rv, df2=csr, cross=cross, agg=agg)
-            mse = [model_builder_obj.models_rolling_metrics_dd[model]['mse'] for model in
-                   model_builder_obj.models_rolling_metrics_dd.keys() if model
-                   and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['mse'], pd.DataFrame)]
-            mse = pd.concat(mse)
-            qlike = [model_builder_obj.models_rolling_metrics_dd[model]['qlike'] for model in
-                     model_builder_obj.models_rolling_metrics_dd.keys() if model
-                     and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['qlike'], pd.DataFrame)]
-            qlike = pd.concat(qlike)
-            r2 = [model_builder_obj.models_rolling_metrics_dd[model]['r2'] for model in
-                  model_builder_obj.models_rolling_metrics_dd.keys() if model
-                  and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['r2'], pd.DataFrame)]
-            r2 = pd.concat(r2)
-            model_axis_dd = {model: False if model == 'har_universal' else True
-                             for _, model in enumerate(model_builder_obj.models)}
-            coefficient = \
-                [pd.DataFrame(
-                    model_builder_obj.models_rolling_metrics_dd[model]['coefficient'].mean(axis=model_axis_dd[model]),
-                    columns=[model])
-                 for model in model_builder_obj.models_rolling_metrics_dd.keys() if model
-                 and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['coefficient'], pd.DataFrame)]
-            coefficient = pd.concat(coefficient, axis=1)
-            coefficient = coefficient.loc[~coefficient.index.str.contains('USDT'), :]
-            model_specific_features = list(set(coefficient.index).difference((set(['const']+F))))
-            model_specific_features.sort()
-            coefficient = coefficient.T[['const']+F+model_specific_features].T
-            coefficient.index.name = 'params'
-            coefficient = pd.melt(coefficient.reset_index(), value_name='value', var_name='model', id_vars='params')
-            coefficient.dropna(inplace=True)
-            """
-            Table insertion
-            """
-            r2.to_sql(con=model_builder_obj.db_connect_r2, name=f'{"_".join(("r2", L, cross_name_dd[cross]))}',
-                      if_exists='replace')
-            mse.to_sql(con=model_builder_obj.db_connect_mse, name=f'{"_".join(("mse", L, cross_name_dd[cross]))}',
-                      if_exists='replace')
-            qlike.to_sql(con=model_builder_obj.db_connect_qlike, name=f'{"_".join(("qlike", L, cross_name_dd[cross]))}',
-                      if_exists='replace')
-            coefficient.to_sql(con=model_builder_obj.db_connect_coefficient,
-                               name=f'{"_".join(("coefficient",L, cross_name_dd[cross]))}', if_exists='replace')
-            print(f'[Insertion]: All tables for {(L, F, cross)} have been inserted into the database.')
-    """
-    Close databases
-    """
-    model_builder_obj.db_connect_r2.close()
-    model_builder_obj.db_connect_mse.close()
-    model_builder_obj.db_connect_qlike.close()
-    model_builder_obj.db_connect_coefficient.close()
+    model_builder_obj = ModelBuilder(F=F, h='30T', L='1D', Q='1D')
+    model_builder_obj.correlation()
+    pdb.set_trace()
+    # agg = '1D'
+    # cross_name_dd = {True: 'cross', False: 'not_crossed'}
+    # transformation = 'scalar'
+    # for L in ['1D', '1W', '1M']:
+    #     model_builder_obj.reinitialise_models_forecast_dd()
+    #     F.append(L)
+    #     model_builder_obj.L = L
+    #     model_builder_obj.F = F
+    #     for cross in [False]:
+    #         print(f'[Computation]: Compute all tables for {(L, F, cross)}...')
+    #         """
+    #         Generate all tables for L, F and not cross|cross (name of table: L_(not)_cross
+    #         """
+    #         for _, model_type in enumerate(model_builder_obj.models):
+    #             if model_type:
+    #                 model_builder_obj.model_type = model_type
+    #                 print(model_builder_obj.model_type)
+    #                 if model_type in ['har', 'har_dummy_markets', 'har_universal']:
+    #                     if cross & (model_type == 'har_universal'):
+    #                         pass
+    #                     else:
+    #                         model_builder_obj.add_metrics(df=rv, cross=cross, agg=agg,
+    #                                                       transformation=transformation)
+    #                 elif model_type == 'har_cdr':
+    #                     model_builder_obj.add_metrics(df=rv, df2=cdr, cross=cross, agg=agg,
+    #                                                   transformation=transformation)
+    #                 elif model_type == 'har_csr':
+    #                     model_builder_obj.add_metrics(df=rv, df2=csr, cross=cross, agg=agg,
+    #                                                   transformation=transformation)
+    #         mse = [model_builder_obj.models_rolling_metrics_dd[model]['mse'] for model in
+    #                model_builder_obj.models_rolling_metrics_dd.keys() if model
+    #                and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['mse'], pd.DataFrame)]
+    #         mse = pd.concat(mse)
+    #         qlike = [model_builder_obj.models_rolling_metrics_dd[model]['qlike'] for model in
+    #                  model_builder_obj.models_rolling_metrics_dd.keys() if model
+    #                  and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['qlike'], pd.DataFrame)]
+    #         qlike = pd.concat(qlike)
+    #         r2 = [model_builder_obj.models_rolling_metrics_dd[model]['r2'] for model in
+    #               model_builder_obj.models_rolling_metrics_dd.keys() if model
+    #               and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['r2'], pd.DataFrame)]
+    #         r2 = pd.concat(r2)
+    #         model_axis_dd = {model: False if model == 'har_universal' else True
+    #                          for _, model in enumerate(model_builder_obj.models)}
+    #         coefficient = \
+    #             [pd.DataFrame(
+    #                 model_builder_obj.models_rolling_metrics_dd[model]['coefficient'].mean(axis=model_axis_dd[model]),
+    #                 columns=[model])
+    #              for model in model_builder_obj.models_rolling_metrics_dd.keys() if model
+    #              and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['coefficient'], pd.DataFrame)]
+    #         coefficient = pd.concat(coefficient, axis=1)
+    #         coefficient = coefficient.loc[~coefficient.index.str.contains('USDT'), :]
+    #         model_specific_features = list(set(coefficient.index).difference((set(['const']+F))))
+    #         model_specific_features.sort()
+    #         coefficient = coefficient.T[['const']+F+model_specific_features].T
+    #         coefficient.index.name = 'params'
+    #         coefficient = pd.melt(coefficient.reset_index(), value_name='value', var_name='model', id_vars='params')
+    #         coefficient.dropna(inplace=True)
+    #         model_builder_obj.models_forecast_dd['har_universal'] = \
+    #             model_builder_obj.models_forecast_dd['har_universal'].droplevel(axis=0, level=1)
+    #         y = pd.concat(model_builder_obj.models_forecast_dd)
+    #         y = y.droplevel(0)
+    #         """
+    #         Table insertion
+    #         """
+    #         r2.to_sql(con=model_builder_obj.db_connect_r2, name=f'{"_".join(("r2", L, cross_name_dd[cross]))}',
+    #                   if_exists='replace')
+    #         mse.to_sql(con=model_builder_obj.db_connect_mse, name=f'{"_".join(("mse", L, cross_name_dd[cross]))}',
+    #                   if_exists='replace')
+    #         qlike.to_sql(con=model_builder_obj.db_connect_qlike, name=f'{"_".join(("qlike", L, cross_name_dd[cross]))}',
+    #                   if_exists='replace')
+    #         coefficient.to_sql(con=model_builder_obj.db_connect_coefficient,
+    #                            name=f'{"_".join(("coefficient",L, cross_name_dd[cross]))}', if_exists='replace')
+    #         y.to_sql(con=model_builder_obj.db_connect_y,
+    #                  name=f'{"_".join(("y",L, cross_name_dd[cross]))}', if_exists='replace')
+    #         print(f'[Insertion]: All tables for {(L, F, cross)} have been inserted into the database.')
+    # """
+    # Close databases
+    # """
+    # model_builder_obj.db_connect_r2.close()
+    # model_builder_obj.db_connect_mse.close()
+    # model_builder_obj.db_connect_qlike.close()
+    # model_builder_obj.db_connect_coefficient.close()
+    # model_builder_obj.db_connect_y.close()
