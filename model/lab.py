@@ -123,6 +123,7 @@ class FeatureCovariance(FeatureBuilderBase):
 class FeatureRiskMetricsEstimator(FeatureBuilderBase):
 
     data_obj = Reader(file='../data_centre/tmp/aggregate2022')
+    factor = .94 #lambda in formala
 
     def __init__(self):
         super().__init__('risk_metrics')
@@ -138,12 +139,12 @@ class FeatureRiskMetricsEstimator(FeatureBuilderBase):
         window = pd.to_timedelta('30D') // pd.to_timedelta('5T') if \
             F[-1] == '1M' else max(4, pd.to_timedelta(F[-1]) // pd.to_timedelta('5T'))
         symbol_returns_df = \
-            df[list(set([symbol[-1]]))].copy().rename(columns={symbol[-1]: '_'.join((symbol[-1], 'RET'))})**2
+            df[list(set([symbol[-1]]))].copy().rename(columns={symbol[-1]: '_'.join((symbol[-1], 'RET', F[-1]))})**2
+        symbol_returns_df = symbol_returns_df.shift(pd.to_timedelta(F[-1])//pd.to_timedelta('5T'))
         symbol_rv_df = FeatureRiskMetricsEstimator.data_obj.rv_read(raw=False, symbol=list_symbol)
-        symbol_rv_df = \
-            symbol_rv_df[list_symbol].rename(columns={sym: '_'.join((sym, 'RV')) for _, sym in enumerate(list_symbol)})
-        symbol_rv_df[f'{"_".join((symbol[-1], "RV", F[-1]))}'] = \
-        symbol_rv_df[f'{"_".join((symbol[-1], "RV"))}'].shift(pd.to_timedelta(F[-1])//pd.to_timedelta('5T'))
+        symbol_rv_df = symbol_rv_df[list_symbol]
+        symbol_rv_df[f'{"_".join((symbol[-1], F[-1]))}'] = \
+            symbol_rv_df[[symbol[-1]]].shift(pd.to_timedelta(F[-1])//pd.to_timedelta('5T'))
         symbol_df = pd.concat([symbol_rv_df, symbol_returns_df], axis=1).dropna()
         return symbol_df
 
@@ -355,7 +356,7 @@ class ModelBuilder:
                                   None: {'transformation': lambda x: x, 'inverse': lambda x: x},
                                   'scalar': {'transformation': lambda x: x*ModelBuilder.factor,
                                              'inverse': lambda x: x/ModelBuilder.factor}}
-    models = [None, 'risk_metrics']#'covariance_ar', 'har', 'har_dummy_markets', 'har_csr', 'har_cdr', 'har_universal']
+    models = [None, 'covariance_ar', 'risk_metrics']#'covariance_ar', 'har', 'har_dummy_markets', 'har_csr', 'har_cdr', 'har_universal']
     models_rolling_metrics_dd = {model: dict([('qlike', {}), ('r2', {}), ('mse', {}),
                                               ('tstats', {}), ('pvalues', {}), ('coefficient', {})])
                                  for _, model in enumerate(models) if model}
@@ -476,6 +477,7 @@ class ModelBuilder:
     @model_type.setter
     def model_type(self, model_type: str):
         self._model_type = model_type
+
     @staticmethod
     def correlation(cutoff_low: float = .01, cutoff_high: float = .01, insert: bool=True) \
             -> typing.Union[None, pd.DataFrame]:
@@ -515,7 +517,6 @@ class ModelBuilder:
                 data = model_obj.builder(symbol=symbol, df=kwargs['df'], F=self._F, df2=kwargs['df2'])
             elif self._model_type in ['har_universal', 'covariance_ar']:
                 data = model_obj.builder(df=kwargs['df'], F=self._F)
-        pdb.set_trace()
         data = \
             pd.DataFrame(
                 data=np.vectorize(ModelBuilder._factory_transformation_dd[transformation]['transformation'])
@@ -531,7 +532,8 @@ class ModelBuilder:
             exog_rv.ffill(inplace=True)
             exog_rv.fillna(axis=1, method='ffill', inplace=True)
             exog = pd.concat([exog_rv, exog_rest], axis=1)
-        regression = ModelBuilder._factory_regression_dd[regression_type]
+        if self._model_type != 'risk_metrics':
+            regression = ModelBuilder._factory_regression_dd[regression_type]
         idx_ls = set(exog.index) if self._model_type != 'har_universal' else set(exog.index.get_level_values(0))
         idx_ls = list(idx_ls)
         idx_ls.sort()
@@ -552,65 +554,76 @@ class ModelBuilder:
                 group_keys=True).apply(lambda x: x.droplevel(1).shift(ModelBuilder.L_shift_dd[self._L]))
             coefficient_update = exog_tmp.index.get_level_values(1).unique()
         coefficient_update = coefficient_update[::pd.to_timedelta(self._Q)//pd.to_timedelta(self._b)]
+        coefficient_update = [pd.to_datetime(date.strftime('%Y-%m-%d')) for _, date in enumerate(coefficient_update)]
         y = list()
         left_date = \
-            (pd.to_timedelta(self._L)//pd.to_timedelta('1D')) if self._L != '1M' \
+            max((pd.to_timedelta(self._L)//pd.to_timedelta('1D')), 1) if self._L != '1M' \
                 else (pd.to_timedelta('30D')//pd.to_timedelta('1D'))
-        for date in coefficient_update[left_date:-1]:
-            start = pd.to_datetime(date) - ModelBuilder.start_dd[self._L]
-            start = pd.to_datetime(start, utc=True)
-            if self._model_type != 'har_universal':
-                X_train, y_train = exog.loc[(exog.index >= start) & (exog.index < pd.to_datetime(date, utc=True))],\
-                endog.loc[(endog.index >= start) & (endog.index < pd.to_datetime(date, utc=True))]
-            else:
-                X_train, y_train = exog.loc[(exog.index.get_level_values(0) >= start) &
-                                            (exog.index.get_level_values(0) < pd.to_datetime(date, utc=True))],\
-                    endog.loc[(endog.index.get_level_values(0) >= start) &
-                              (endog.index.get_level_values(0) < pd.to_datetime(date, utc=True))]
-            X_train.dropna(inplace=True)
-            y_train.dropna(inplace=True)
-            X_train.replace(np.inf, np.nan, inplace=True)
-            X_train.replace(-np.inf, np.nan, inplace=True)
-            y_train.replace(np.inf, np.nan, inplace=True)
-            y_train.replace(-np.inf, np.nan, inplace=True)
-            X_train.ffill(inplace=True)
-            y_train.ffill(inplace=True)
-            try:
-                rres = regression.fit(X_train, y_train)
-            except ValueError:
-                pdb.set_trace()
-            coefficient.loc[date, :] = np.concatenate((np.array([rres.intercept_]), rres.coef_))
-            """Test set"""
-            test_date = (pd.to_datetime(date) + ModelBuilder.start_dd['1D']).date()
-            X_test, y_test = exog.loc[test_date.strftime('%Y-%m-%d'), :], endog.loc[test_date.strftime('%Y-%m-%d')]
-            X_test = X_test.assign(const=1)
-            X_test.replace(np.inf, np.nan, inplace=True)
-            X_test.replace(-np.inf, np.nan, inplace=True)
-            y_test.replace(np.inf, np.nan, inplace=True)
-            y_test.replace(-np.inf, np.nan, inplace=True)
-            X_test.ffill(inplace=True)
-            y_test.ffill(inplace=True)
-            y_hat = \
-                pd.DataFrame(data=np.multiply(X_test.values,
-                                              coefficient.loc[date, X_test.columns.tolist()].values),
-                             columns=columns_name, index=X_test.index)
-            y_hat = y_hat.sum(axis=1)
-            y_hat = \
-                pd.Series(data=
-                          y_hat.apply(lambda x: ModelBuilder._factory_transformation_dd[transformation]['inverse'](x)),
-                          index=y_hat.index)
-            y_test = \
-                pd.Series(data=
-                          y_test.apply(lambda x: ModelBuilder._factory_transformation_dd[transformation]['inverse'](x)),
-                          index=y_test.index)
-            y_test[y_test<0] = 0
-            y.append(pd.concat([y_test, y_hat], axis=1))
-            """Tstats"""
-            tstats.loc[date, :] = \
-                coefficient.loc[date, :].div((np.diag(np.matmul(X_test.values.transpose(),
-                                                                X_test.values))/np.sqrt(X_test.shape[0])))
-            """Pvalues"""
-            pvalues.loc[date, :] = 2*(1-t.cdf(tstats.loc[date, :].values, df=X_train.shape[0]-coefficient.shape[1]-1))
+        if self._model_type != 'risk_metrics':
+            for date in coefficient_update[left_date:-1]:
+                start = \
+                    pd.to_datetime(date) - ModelBuilder.start_dd['1D'] if \
+                        self._model_type == 'covariance_ar' else pd.to_datetime(date) - ModelBuilder.start_dd[self._L]
+                start = pd.to_datetime(start, utc=True)
+                if self._model_type != 'har_universal':
+                    X_train, y_train = exog.loc[(exog.index >= start) & (exog.index < pd.to_datetime(date, utc=True))],\
+                    endog.loc[(endog.index >= start) & (endog.index < pd.to_datetime(date, utc=True))]
+                else:
+                    X_train, y_train = exog.loc[(exog.index.get_level_values(0) >= start) &
+                                                (exog.index.get_level_values(0) < pd.to_datetime(date, utc=True))],\
+                        endog.loc[(endog.index.get_level_values(0) >= start) &
+                                  (endog.index.get_level_values(0) < pd.to_datetime(date, utc=True))]
+                X_train.dropna(inplace=True)
+                y_train.dropna(inplace=True)
+                X_train.replace(np.inf, np.nan, inplace=True)
+                X_train.replace(-np.inf, np.nan, inplace=True)
+                y_train.replace(np.inf, np.nan, inplace=True)
+                y_train.replace(-np.inf, np.nan, inplace=True)
+                X_train.ffill(inplace=True)
+                y_train.ffill(inplace=True)
+                try:
+                    rres = regression.fit(X_train, y_train)
+                except ValueError:
+                    pdb.set_trace()
+                coefficient.loc[date, :] = np.concatenate((np.array([rres.intercept_]), rres.coef_))
+                """Test set"""
+                test_date = (pd.to_datetime(date) + ModelBuilder.start_dd['1D']).date()
+                X_test, y_test = exog.loc[test_date.strftime('%Y-%m-%d'), :], endog.loc[test_date.strftime('%Y-%m-%d')]
+                X_test = X_test.assign(const=1)
+                X_test.replace(np.inf, np.nan, inplace=True)
+                X_test.replace(-np.inf, np.nan, inplace=True)
+                y_test.replace(np.inf, np.nan, inplace=True)
+                y_test.replace(-np.inf, np.nan, inplace=True)
+                X_test.ffill(inplace=True)
+                y_test.ffill(inplace=True)
+                y_hat = \
+                    pd.DataFrame(data=np.multiply(X_test.values,
+                                                  coefficient.loc[date, X_test.columns.tolist()].values),
+                                 columns=columns_name, index=X_test.index)
+                y_hat = y_hat.sum(axis=1)
+                y_hat = \
+                    pd.Series(data=
+                              y_hat.apply(lambda x: ModelBuilder._factory_transformation_dd[transformation]
+                              ['inverse'](x)),
+                              index=y_hat.index)
+                y_test = \
+                    pd.Series(data=
+                              y_test.apply(lambda x: ModelBuilder._factory_transformation_dd[transformation]
+                              ['inverse'](x)),
+                              index=y_test.index)
+                y.append(pd.concat([y_test, y_hat], axis=1))
+                """Tstats"""
+                tstats.loc[date, :] = \
+                    coefficient.loc[date, :].div((np.diag(np.matmul(X_test.values.transpose(),
+                                                                    X_test.values))/np.sqrt(X_test.shape[0])))
+                """Pvalues"""
+                pvalues.loc[date, :] = 2*(1-t.cdf(tstats.loc[date, :].values, df=X_train.shape[0]-coefficient.shape[1]-1))
+        else:
+            coefficient.drop('const', axis=1, inplace=True)
+            coefficient.iloc[:, 0] = model_obj.factor
+            coefficient.iloc[:, 1] = (1 - model_obj.factor)
+            y_hat = coefficient.mul(exog).sum(axis=1)
+            y.append(pd.concat([endog, y_hat], axis=1))
         y = pd.concat(y)
         ModelBuilder.models_forecast_dd[self._model_type].append(y)
         tmp = y.groupby(by=pd.Grouper(level=0, freq='1D')) if \
@@ -645,7 +658,7 @@ class ModelBuilder:
     def add_metrics(self, regression_type: str='linear', transformation=None, cross: bool=False, **kwargs) -> None:
         if self._model_type != 'har_universal':
             if self._model_type in ['covariance_ar']:
-                pass#coin_ls = [coin.replace('USDT', '') for _, coin in enumerate(self._coins)]
+                coin_ls = ['COV']
             else:
                 coin_ls = set(self._coins).intersection(set(kwargs['df'].columns))
                 coin_ls = list(coin_ls)
@@ -703,7 +716,6 @@ class ModelBuilder:
              ModelBuilder.models_forecast_dd[self._model_type]]
         y = pd.concat(ModelBuilder.models_forecast_dd[self._model_type])
         y = y.assign(model=self._model_type)
-        pdb.set_trace()
         ModelBuilder.models_forecast_dd[self._model_type] = y
         ModelBuilder.remove_redundant_key(mse_dd)
         ModelBuilder.remove_redundant_key(qlike_dd)
@@ -831,7 +843,7 @@ if __name__ == '__main__':
             coefficient = coefficient.loc[~coefficient.index.str.contains('USDT'), :]
             model_specific_features = list(set(coefficient.index).difference((set(['const']+F))))
             model_specific_features.sort()
-            coefficient = coefficient.T[['const']+F+model_specific_features].T
+            coefficient = coefficient.T[F+model_specific_features].T #['const']+
             coefficient.index.name = 'params'
             coefficient = pd.melt(coefficient.reset_index(), value_name='value', var_name='model', id_vars='params')
             coefficient.dropna(inplace=True)
@@ -839,18 +851,21 @@ if __name__ == '__main__':
             #     model_builder_obj.models_forecast_dd['har_universal'].droplevel(axis=0, level=1)
             y = pd.concat(model_builder_obj.models_forecast_dd)
             y = y.droplevel(0)
-            pdb.set_trace()
             """
             Table insertion
             """
+            r2.index.name = 'timestamp'
             r2.to_sql(con=model_builder_obj.db_connect_r2, name=f'{"_".join(("r2", L, cross_name_dd[cross]))}',
                       if_exists='replace')
+            mse.index.name = 'timestamp'
             mse.to_sql(con=model_builder_obj.db_connect_mse, name=f'{"_".join(("mse", L, cross_name_dd[cross]))}',
                       if_exists='replace')
+            qlike.index.name = 'timestamp'
             qlike.to_sql(con=model_builder_obj.db_connect_qlike, name=f'{"_".join(("qlike", L, cross_name_dd[cross]))}',
                       if_exists='replace')
             coefficient.to_sql(con=model_builder_obj.db_connect_coefficient,
                                name=f'{"_".join(("coefficient",L, cross_name_dd[cross]))}', if_exists='replace')
+            y.index.name = 'timestamp'
             y.to_sql(con=model_builder_obj.db_connect_y,
                      name=f'{"_".join(("y",L, cross_name_dd[cross]))}', if_exists='replace')
             print(f'[Insertion]: All tables for {(L, F, cross)} have been inserted into the database.')
