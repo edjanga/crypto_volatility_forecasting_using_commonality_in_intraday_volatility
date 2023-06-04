@@ -749,7 +749,7 @@ class PlotResults:
         models_ls = y.model.unique().tolist()
         col_grid = 1
         row_grid = len(models_ls) + 1
-        fig = make_subplots(rows=row_grid, cols=col_grid, row_titles=models_ls)
+        fig = make_subplots(rows=row_grid, cols=col_grid, row_titles=models_ls, shared_xaxes=True)
         fig_title = f'Scatter plot - {L} {cross_dd[cross]}'
         for i, model in enumerate(models_ls):
             if model:
@@ -757,7 +757,7 @@ class PlotResults:
                 tmp_df = tmp_df.resample('30T').last()
                 fig.add_trace(go.Scatter(x=tmp_df.y, y=tmp_df.y_hat, showlegend=True, name=model,
                                          mode='markers'), row=i+1, col=1)
-        fig.update_layout(height=1500, width=1200, title={'text': fig_title})
+        fig.update_layout(height=1500, width=1200, title={'text': fig_title}, xaxis_title='RV', yaxis_title='fitted RV')
         if save:
             fig.write_image(os.path.abspath(f'./scatter_plot_{L}_{cross_dd[cross]}.png'))
         fig.show()
@@ -795,35 +795,35 @@ class PlotResults:
 
 if __name__ == '__main__':
 
-    # plot_results_obj = PlotResults()
-    # for L in ['1D', '1W', '1M']:
-    #     for cross in [False]:
-    #         plot_results_obj.rolling_metrics_barplot(L=L, cross=cross, save=False)
-    # for L in ['1D', '1W', '1M']:
-    #     for cross in [False]:
-    #         plot_results_obj.scatterplot(L=L, cross=cross, save=False)
-    # for L in ['1D', '1W', '1M']:
-    #     for cross in [False]:
-    #         plot_results_obj.distribution(L=L, cross=cross, save=False)
-    # pdb.set_trace()
-    # for L in ['1D', '1W', '1M']:
-    #     for cross in [False]:
-    #         plot_results_obj.coefficient(L=L, cross=cross, save=False)
-    # """
-    #     CLose database
-    # """
-    # plot_results_obj.db_connect_coefficient.close()
-    # for L in ['1D', '1W', '1M']:
-    #     for cross in [False]:
-    #         plot_results_obj.rolling_metrics(L=L, cross=cross, save=False)
-    # """
-    #     Close databases
-    # """
-    # plot_results_obj.db_connect_r2.close()
-    # plot_results_obj.db_connect_mse.close()
-    # plot_results_obj.db_connect_qlike.close()
-    # plot_results_obj.db_connect_y.close()
-    # pdb.set_trace()
+    plot_results_obj = PlotResults()
+    F = ['5T']
+    for L in F:
+        for cross in [False]:
+            plot_results_obj.rolling_metrics_barplot(L=L, cross=cross, save=False)
+    for L in F:
+        for cross in [False]:
+            plot_results_obj.scatterplot(L=L, cross=cross, save=False)
+    for L in F:
+        for cross in [False]:
+            plot_results_obj.distribution(L=L, cross=cross, save=False)
+    for L in F:
+        for cross in [False]:
+            plot_results_obj.coefficient(L=L, cross=cross, save=False)
+    """
+        CLose database
+    """
+    plot_results_obj.db_connect_coefficient.close()
+    for L in F:
+        for cross in [False]:
+            plot_results_obj.rolling_metrics(L=L, cross=cross, save=False)
+    """
+        Close databases
+    """
+    plot_results_obj.db_connect_r2.close()
+    plot_results_obj.db_connect_mse.close()
+    plot_results_obj.db_connect_qlike.close()
+    plot_results_obj.db_connect_y.close()
+    pdb.set_trace()
     def box_plot(cutoff_low: float = .01, cutoff_high: float = .01, save: bool=False):
         reader_obj = Reader(file=os.path.abspath('../data_centre/tmp/aggregate2022'))
         rv_raw = reader_obj.rv_read(raw=True, cutoff_low=cutoff_low, cutoff_high=cutoff_high)
@@ -852,5 +852,3 @@ if __name__ == '__main__':
         if save:
             fig.write_image(os.path.abspath(f'./correlation.png'))
         fig.show()
-        pdb.set_trace()
-    correlation()
