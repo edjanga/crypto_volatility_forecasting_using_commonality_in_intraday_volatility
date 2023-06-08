@@ -8,6 +8,8 @@ data_centre/databases
 data_centre/databases/
 model/*.csv
 test.py
+test2.py
+main.sh
 .idea/
 .idea
 __pycache__
