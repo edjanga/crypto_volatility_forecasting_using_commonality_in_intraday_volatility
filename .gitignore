@@ -6,6 +6,7 @@ data_centre/tmp
 data_centre/tmp/
 data_centre/databases
 data_centre/databases/
+model/*.csv
 test.py
 .idea/
 .idea

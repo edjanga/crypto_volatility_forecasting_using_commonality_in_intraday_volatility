@@ -42,7 +42,7 @@ class Reader:
         rv_df = \
             self.returns_read(cutoff_low=cutoff_low, cutoff_high=cutoff_high,
                               raw=raw, resampled=False, symbol=symbol)**2
-        rv_df = rv_df.resample('5T').sum()
+        rv_df = rv_df.resample('5T').sum()#**.5
         return rv_df
 
     def cdr_read(self, cutoff_low: float = .05, cutoff_high: float = .05) -> pd.DataFrame:
@@ -55,11 +55,10 @@ class Reader:
         cdr_df.index = pd.to_datetime(cdr_df.index)
         cdr_df = cdr_df.apply(lambda x: winsorize(x, (cutoff_low, cutoff_high)))
         cdr_df = cdr_df.resample('5T').last() / cdr_df.resample('5T').sum()
-
         return cdr_df
 
     def csr_read(self, feature_range: typing.Tuple[float] = None,
-                 cutoff_low: float = .05, cutoff_high: float = .05) -> pd.DataFrame:
+                 cutoff_low: float = .01, cutoff_high: float = .01) -> pd.DataFrame:
         if feature_range:
             Reader._min_max_scaler.feature_range = feature_range
         csr_df = pd.read_parquet(os.path.abspath(self._directory),
