@@ -2,6 +2,7 @@ import pdb
 import typing
 import pandas as pd
 from sklearn.linear_model import LinearRegression
+from sklearn.decomposition import PCA
 from sklearn.metrics import r2_score, mean_squared_error
 import os
 from dateutil.relativedelta import relativedelta
@@ -48,6 +49,7 @@ class ModelBuilder:
                               'har_universal': FeatureHARUniversal()}
     _factory_regression_dd = {'linear': LinearRegression()}
     factor = 100_000
+    _pca_obj = PCA()
     _factory_transformation_dd = {'log': {'transformation': np.log, 'inverse': np.exp},
                                   None: {'transformation': lambda x: x, 'inverse': lambda x: x},
                                   'scalar': {'transformation': lambda x: x*ModelBuilder.factor,
@@ -61,9 +63,11 @@ class ModelBuilder:
     models_forecast_dd = {model: list() for _, model in enumerate(models) if model}
     _coins = coin_ls
     _coins = [''.join((coin, 'usdt')).upper() for _, coin in enumerate(_coins)]
+    global _pca_components_symbols_dd
+    _pca_components_symbols_dd = dict([coin, list()] for coin in _coins)
+    _pca_components_models_dd = dict([model, _pca_components_symbols_dd] for model in models if model)
     global symbol_networks_dd
-    symbol_networks_dd = dict([(symbol, dict()) for _, symbol in enumerate(_coins)])
-    symbol_networks_dd = {symbol: symbol_networks_dd for symbol, _ in symbol_networks_dd.items()}
+    symbol_networks_dd = dict([(symbol, None) for _, symbol in enumerate(_coins)])
     models_networks_dd = \
         dict([(model, symbol_networks_dd) for _, model in enumerate(models) if model not in [None, 'har_universal']])
     outliers_dd = {L: list() for _, L in enumerate(['1D', '1W', '1M'])}
@@ -259,7 +263,7 @@ class ModelBuilder:
         if self._model_type != 'har_universal':
             if isinstance(symbol, str):
                 symbol = (symbol, symbol)
-            exog_rv = data.filter(regex=f'{symbol[-1]}')
+            exog_rv = data.filter(regex=f'{symbol}')
             exog_rest = data.loc[:, ~data.columns.isin(exog_rv.columns.tolist())]
             exog_rv.replace(0, np.nan, inplace=True)
             exog_rv.ffill(inplace=True)
@@ -271,13 +275,30 @@ class ModelBuilder:
         if self._model_type not in ModelBuilder.models:
             raise ValueError('Model type not available')
         else:
-            data = self.getting_data(symbol, transformation, **kwargs)
+            if not cross:
+                data = self.getting_data(symbol, transformation, **kwargs)
+                endog = data.pop(symbol) if self._model_type != 'har_universal' else data.pop('RV')
+                endog.replace(0, np.nan, inplace=True)
+                endog.ffill(inplace=True)
+                exog = data
+                exog = self.clean_exog(exog, symbol) if self._model_type != 'har_universal' else exog
+            else:
+                exog = ModelBuilder.models_networks_dd[self._model_type][symbol]
+                endog = ModelBuilder.reader_obj.rv_read(symbol=symbol)
+                original_min = abs(exog.min().min())
+                negative_value_in_exog = (exog < 0).sum().sum() > 0
+                if (transformation == 'log') & ((exog < 0).sum().sum() > 0):
+                    exog = exog + original_min
+                    endog = endog + original_min
+                exog = pd.DataFrame(data=np.vectorize(
+                    ModelBuilder._factory_transformation_dd[transformation]['transformation'])(exog.values),
+                                    index=exog.index, columns=exog.columns)
+                exog = exog - original_min if ((transformation == 'log') & negative_value_in_exog & cross) else exog
+                endog = pd.DataFrame(data=np.vectorize(
+                    ModelBuilder._factory_transformation_dd[transformation]['transformation'])
+                (endog.values), index=endog.index, columns=endog.columns)
+                endog = endog - original_min if ((transformation == 'log') & negative_value_in_exog & cross) else endog
             feature_obj = ModelBuilder._factory_model_type_dd[self._model_type]
-        endog = data.pop(symbol[0]) if self._model_type != 'har_universal' else data.pop('RV')
-        endog.replace(0, np.nan, inplace=True)
-        endog.ffill(inplace=True)
-        exog = data
-        exog = self.clean_exog(exog, symbol) if self._model_type != 'har_universal' else exog
         regression = ModelBuilder._factory_regression_dd[regression_type]
         idx_ls = set(exog.index) if self._model_type != 'har_universal' else set(exog.index.get_level_values(0))
         idx_ls = list(idx_ls)
@@ -310,6 +331,7 @@ class ModelBuilder:
                                             (exog.index.get_level_values(0) < pd.to_datetime(date, utc=True))],\
                     endog.loc[(endog.index.get_level_values(0) >= start) &
                               (endog.index.get_level_values(0) < pd.to_datetime(date, utc=True))]
+
                 X_train.dropna(inplace=True)
                 y_train.dropna(inplace=True)
                 X_train.replace(np.inf, np.nan, inplace=True)
@@ -334,24 +356,32 @@ class ModelBuilder:
                     y_train = y_train.droplevel(axis=0, level=0)
                 old_N = X_train.shape[0]
                 new_N = y_train.shape[0]
+                y_train = y_train if isinstance(y_train, pd.Series) else y_train.iloc[:, 0]
                 if y_train.any():
                     intersection_date = list(set(X_train.index).intersection(set(y_train[y_train.isnull()].index)))
                     X_train.drop(intersection_date, inplace=True, axis=0)
                     y_train.dropna(inplace=True)
                     new_N = y_train.shape[0]
-                if self._model_type == 'har':
-                    ModelBuilder.outliers_dd[self._L].append(new_N / old_N)
-                if (not X_train.filter(regex='_1W').empty) & (self._model_type != 'har_universal'):
-                    if X_train.filter(regex='_1W').iloc[:, 0].unique().shape[0] > 1:
-                        X_train = rv_1w_correction(X_train, self._L)
-                elif (not X_train.filter(regex='_1W').empty) & (self._model_type == 'har_universal'):
-                    X_train = X_train.groupby(by=pd.Grouper(level=-1), group_keys=True).apply(rv_1w_correction)
-                    X_train = X_train.droplevel(axis=0, level=0)
+                if not cross:
+                    if self._model_type == 'har':
+                        ModelBuilder.outliers_dd[self._L].append(new_N / old_N)
+                    if (not X_train.filter(regex='_1W').empty) & (self._model_type != 'har_universal'):
+                        if X_train.filter(regex='_1W').iloc[:, 0].unique().shape[0] > 1:
+                            X_train = rv_1w_correction(X_train, self._L)
+                    elif (not X_train.filter(regex='_1W').empty) & (self._model_type == 'har_universal'):
+                        X_train = X_train.groupby(by=pd.Grouper(level=-1), group_keys=True).apply(rv_1w_correction)
+                        X_train = X_train.droplevel(axis=0, level=0)
+                else:
+                    if self._model_type != 'har_universal':
+                        ModelBuilder.outliers_dd[self._L].append(new_N / old_N)
+                    else:
+                        pdb.set_trace()
                 rres = regression.fit(X_train, y_train)
                 coefficient.loc[date, :] = np.concatenate((np.array([rres.intercept_]), rres.coef_))
                 """Test set"""
                 test_date = (date + ModelBuilder.start_dd['1D']).date()
                 X_test, y_test = exog.loc[test_date.strftime('%Y-%m-%d'), :], endog.loc[test_date.strftime('%Y-%m-%d')]
+                y_test = y_test if isinstance(y_test, pd.Series) else y_test.iloc[:, 0]
                 X_test = X_test.assign(const=1)
                 X_test.replace(np.inf, np.nan, inplace=True)
                 X_test.replace(-np.inf, np.nan, inplace=True)
@@ -413,67 +443,95 @@ class ModelBuilder:
         pvalues.dropna(inplace=True)
         coefficient = coefficient.loc[coefficient.index[::pd.to_timedelta(self._h)//pd.to_timedelta(self._b)], :]
         coefficient.columns = \
-            coefficient.columns.str.replace('_'.join((symbol[-1], '')), '') \
+            coefficient.columns.str.replace('_'.join((symbol, '')), '') \
                 if self._model_type != 'har_universal' else coefficient.columns.str.replace('_'.join(('RV', '')), '')
-        tstats.columns = tstats.columns.str.replace('_'.join((symbol[-1], '')), '') \
+        tstats.columns = tstats.columns.str.replace('_'.join((symbol, '')), '') \
             if self._model_type != 'har_universal' else tstats.columns.str.replace('_'.join(('RV', '')), '')
-        pvalues.columns = pvalues.columns.str.replace('_'.join((symbol[-1], '')), '') \
+        pvalues.columns = pvalues.columns.str.replace('_'.join((symbol, '')), '') \
             if self._model_type != 'har_universal' else pvalues.columns.str.replace('_'.join(('RV', '')), '')
         if self._model_type != 'har_universal':
-            y = y.assign(model=self._model_type, symbol=symbol[0])
+            y = y.assign(model=self._model_type, symbol=symbol)
         else:
             y = y.reset_index()
             y['symbol'] = feature_obj.label_encoder_obj.inverse_transform(y['symbol'])
             y = y.assign(model=self._model_type)
             y = y.set_index('timestamp')
         y = \
-            y.rename(columns={symbol[0]: 'y', 0: 'y_hat'}) if self._model_type != 'har_universal'\
+            y.rename(columns={symbol: 'y', 0: 'y_hat'}) if self._model_type != 'har_universal'\
                 else y.rename(columns={'RV': 'y', 0: 'y_hat'})
         ModelBuilder.models_forecast_dd[self._model_type].append(y)
         return mse, qlike, r2, coefficient, tstats, pvalues
 
-    def rolling_metrics_cross(self, symbol: typing.Union[typing.Tuple[str], str], regression_type: str='linear',
-                              transformation=None, **kwargs) -> typing.Tuple[pd.Series]:
-        if self._model_type not in ModelBuilder.models:
-            raise ValueError('Model type not available')
-        else:
-            if isinstance(symbol, str):
-                symbol = (symbol, symbol)
-            rv = ModelBuilder.reader_obj.rv_read()
-            """
-                Apply transformation on rv here
-            """
-            global feature_obj
-            feature_obj = ModelBuilder._factory_model_type_dd[self._model_type]
-        global auxiliary_regression
-        auxiliary_regression = ModelBuilder._factory_regression_dd['linear']
-        global F
-        F = self._F
-        if self._model_type != 'har_universal':
-            global exog
-            global endog
-            exog = pd.concat([feature_obj.builder(df=rv, symbol=symbol, F=F) for symbol in rv.columns], axis=1)
-            endog = exog.pop(symbol[0])
-            exog = \
-                pd.concat([pd.Series(data=auxiliary_regression.fit(exog.filter(regex=f'{symbol}'), endog).predict(
-                exog.filter(regex=f'{symbol}')), index=exog.index, name=symbol) for symbol in rv.columns], axis=1)
-        else:
+    def fill_model_network(self, symbol: str, transformation: str = None,
+                           variance_explained: float = .9, **kwargs) -> None:
+        """
+            Method needed to fill in models_networks_dd for each model and each symbol.
+            Steps for each token pair i,j in the universe:
+                - regress i on features of j -> y_hat
+                - store that y_hat with token j name in models_networks_dd
+        """
+        try:
+            if self._model_type not in ModelBuilder.models:
+                raise ValueError('Model type not available')
+            else:
+                rv = ModelBuilder.reader_obj.rv_read()
+                rv = \
+                    pd.DataFrame(
+                        data=np.vectorize(
+                            ModelBuilder._factory_transformation_dd[transformation]['transformation'])
+                        (rv.values), index=rv.index, columns=rv.columns)
+                feature_obj = ModelBuilder._factory_model_type_dd[self._model_type]
+            auxiliary_regression = ModelBuilder._factory_regression_dd['linear']
+            if self._model_type != 'har_universal':
+                if self._model_type in ['har', 'har_dummy_markets']:
+                    exog = pd.concat([feature_obj.builder(df=rv, symbol=symbol, F=self._F) for symbol in rv.columns],
+                                     axis=1)
+                elif self._model_type in ['har_cdr', 'har_csr']:
+                    exog = pd.concat([feature_obj.builder(df=rv, symbol=symbol, df2=kwargs['df2'],
+                                                          F=self._F) for symbol in rv.columns], axis=1)
+                filter_dd = {'har': f'{symbol}', 'har_dummy_markets': f'{symbol}|session',
+                             'har_cdr': f'{symbol}|{"_".join((symbol, "CDR"))}', 'har_csr': f'{symbol}'}
+                endog = exog.pop(symbol)
+                exog = \
+                    pd.concat([pd.Series(data=auxiliary_regression.fit(exog.filter(regex=filter_dd[self._model_type]),
+                    endog).predict(exog.filter(regex=filter_dd[self._model_type])),
+                                         index=exog.index, name=symbol) for
+                    symbol in rv.columns], axis=1)
+            else:
+                pass
+            exog_pca = ModelBuilder._pca_obj.fit_transform(exog)
+            variance_ratio_percentage = np.cumsum(ModelBuilder._pca_obj.explained_variance_ratio_)
+            variance_ratio_percentage = variance_ratio_percentage > variance_explained
+            n_components = np.where(variance_ratio_percentage == True)[0][0]+1
+            ModelBuilder._pca_components_models_dd[self._model_type][symbol].append(n_components)
+            exog = pd.DataFrame(index=exog.index, columns=['_'.join(('PC', str(n+1))) for n in range(0, n_components)],
+                                data=exog_pca[:, :n_components])
+            ModelBuilder.models_networks_dd[self._model_type][symbol] = exog
+        except Exception as e:
             pdb.set_trace()
+            return None
 
     @staticmethod
     def reinitialise_models_forecast_dd():
         ModelBuilder.models_forecast_dd = {model: list() for _, model in enumerate(ModelBuilder.models) if model}
 
-    def add_metrics(self, regression_type: str = 'linear', transformation = None,
+    def add_metrics(self, regression_type: str = 'linear', transformation: str = None,
                     cross: bool = False, **kwargs) -> None:
-        if self._model_type != 'har_universal':
-            if self._model_type in ['covariance_ar']:
-                coin_ls = ['COV']
+        if cross:
+            if self._model_type != 'har_universal':
+                for symbol in ModelBuilder._coins:
+                    if self._model_type in ['har', 'har_dummy_markets']:
+                        self.fill_model_network(symbol=symbol, transformation=transformation,
+                                                variance_explained=kwargs['variance_explained'])
+                    elif self._model_type in ['har_cdr', 'har_csr']:
+                        self.fill_model_network(symbol=symbol, transformation=transformation,
+                                                variance_explained=kwargs['variance_explained'], df2=kwargs['df2'])
             else:
-                coin_ls = set(self._coins).intersection(set(kwargs['df'].columns))
-                coin_ls = list(coin_ls)
-            if cross:
-                coin_ls = list(product(coin_ls, repeat=2))
+                pdb.set_trace()
+        if self._model_type != 'har_universal':
+            coin_ls = set(self._coins).intersection(set(kwargs['df'].columns))
+            coin_ls = list(coin_ls)
+            coin_ls = ['COV'] if self._model_type == 'covariance_ar' else coin_ls
             r2_dd = dict([(pair, pd.DataFrame()) for _, pair in enumerate(coin_ls)])
             mse_dd = dict([(pair, pd.DataFrame()) for _, pair in enumerate(coin_ls)])
             qlike_dd = dict([(pair, pd.DataFrame()) for _, pair in enumerate(coin_ls)])
@@ -493,13 +551,8 @@ class ModelBuilder:
                                    transformation=None, **kwargs) -> None:
             mse_s, qlike_s, r2_s, coefficient_df, tstats_df, pvalues_df = \
                 self.rolling_metrics(symbol=symbol, regression_type=regression_type,
-                                     transformation=transformation, **kwargs) if not cross else \
-                    self.rolling_metrics_cross(symbol=symbol, regression_type=regression_type,
-                                               transformation=transformation, **kwargs)
+                                     transformation=transformation, cross=cross, **kwargs)
 
-            """
-                Switch not cross / cross
-            """
             if isinstance(symbol, tuple):
                 for series_s in [mse_s, qlike_s, r2_s]:
                     series_s.name = '_'.join(series_s.name)
@@ -512,7 +565,6 @@ class ModelBuilder:
             pvalues_dd[symbol] = pvalues_df
 
         if self._model_type != 'har_universal':
-            #cross_dd = {True: self._pairs, False: coin_ls}
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 add_metrics_per_symbol_results_dd = \
                     {symbol: executor.submit(add_metrics_per_symbol(regression_type=regression_type, **kwargs,
@@ -585,14 +637,15 @@ if __name__ == '__main__':
     csr = data_obj.csr_read()
     F = ['1H', '6H', '12H']
     L = '1D'
-    models_ls = [None, 'har']#, 'har_dummy_markets', 'har_cdr', 'har_universal']
+    models_ls = [None, 'har', 'har_dummy_markets', 'har_cdr']#,'har', har_dummy_markets 'har_cdr', 'har_universal']
     model_builder_obj = ModelBuilder(F=F, h='30T', L=L, Q='1D')
     model_builder_obj.models = models_ls
     print(model_builder_obj.models)
     agg = '1W'
-    cross_name_dd = {True: 'cross'}#, False: 'not_crossed'}
+    cross_name_dd = {False: 'not_crossed', True: 'cross'}
     transformation_dd = {None: 'level', 'log': 'log'}
     test = True
+    var_explained = .9
     for L in ['1D', '1W', '1M']:
         F.append(L)
         model_builder_obj.L = L
@@ -609,20 +662,23 @@ if __name__ == '__main__':
                         model_builder_obj.model_type = model_type
                         print(model_builder_obj.model_type)
                         if model_type in ['har', 'har_dummy_markets', 'har_universal']:
-                            if cross & (model_type == 'har_universal'):
-                                pass
+                            if model_builder_obj.model_type != 'har_universal':
+                                model_builder_obj.add_metrics(df=rv, cross=cross, agg=agg,
+                                                              transformation=transformation_tag,
+                                                              variance_explained=var_explained)
                             else:
                                 model_builder_obj.add_metrics(df=rv, cross=cross, agg=agg,
                                                               transformation=transformation_tag)
-                        elif model_type == 'har_cdr':
+                        elif model_builder_obj.model_type == 'har_cdr':
                             model_builder_obj.add_metrics(df=rv, df2=cdr, cross=cross, agg=agg,
-                                                          transformation=transformation_tag)
-                        elif model_type == 'har_csr':
+                                                          transformation=transformation_tag,
+                                                          variance_explained=var_explained)
+                        elif model_builder_obj.model_type == 'har_csr':
                             model_builder_obj.add_metrics(df=rv, df2=csr, cross=cross, agg=agg,
-                                                          transformation=transformation_tag)
-                        elif model_type in ['covariance_ar', 'risk_metrics']:
-                            model_builder_obj.add_metrics(df=returns,
-                                                          cross=cross, agg=agg, transformation=transformation_tag)
+                                                          transformation=transformation_tag,
+                                                          variance_explained=var_explained)
+                        elif model_builder_obj.model_type in ['covariance_ar', 'risk_metrics']:
+                            model_builder_obj.add_metrics(df=returns, agg=agg, transformation=transformation_tag)
                 mse = [model_builder_obj.models_rolling_metrics_dd[model]['mse'] for model in
                        model_builder_obj.models_rolling_metrics_dd.keys() if model
                        and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['mse'], pd.DataFrame)]
@@ -644,10 +700,13 @@ if __name__ == '__main__':
                      for model in model_builder_obj.models_rolling_metrics_dd.keys() if model
                      and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['coefficient'], pd.DataFrame)]
                 coefficient = pd.concat(coefficient, axis=1)
-                coefficient = coefficient.loc[~coefficient.index.str.contains('USDT'), :]
                 model_specific_features = list(set(coefficient.index).difference((set(['const']+F))))
                 model_specific_features.sort()
-                coefficient = coefficient.T[['const']+F+model_specific_features].T
+                try:
+                    coefficient = coefficient.T[['const']+F+model_specific_features].T if not cross else \
+                    coefficient.T[['const']+model_specific_features].T
+                except KeyError:
+                    pdb.set_trace()
                 coefficient.index.name = 'params'
                 coefficient = pd.melt(coefficient.reset_index(), value_name='value', var_name='model', id_vars='params')
                 coefficient.dropna(inplace=True)
@@ -689,6 +748,9 @@ if __name__ == '__main__':
                     print(f'[Insertion]: '
                           f'All tables for {(L, F, cross, transformation)} '
                           f'have been inserted into the database.')
+    """
+        Stats about number of PCAs per model and symbol
+    """
     for L, ls in model_builder_obj.outliers_dd.items():
         model_builder_obj.outliers_dd[L] = pd.Series(ls, name=L)
     outliers = pd.DataFrame(model_builder_obj.outliers_dd)

@@ -14,7 +14,6 @@ class Reader:
     def __init__(self, file: typing.Union[typing.List[str], str] = os.path.abspath('./data_centre/tmp/aggregate2022')):
         self._directory = file
 
-
     def returns_read(self, cutoff_low: float = .01, cutoff_high: float = .01, raw: bool=False,
                      resampled: bool=True, symbol: typing.Union[typing.List[str], str]=None) -> pd.DataFrame:
         returns_df = pd.read_parquet(os.path.abspath(self._directory), columns=['timestamp', 'pret_1m', 'symbol'])
@@ -37,7 +36,7 @@ class Reader:
         return returns_df
 
     def rv_read(self, cutoff_low: float = .01, cutoff_high: float = .01, raw: bool=False,
-                symbol: typing.Union[typing.List[str],str]=None)\
+                symbol: typing.Union[typing.List[str], str]=None)\
             -> pd.DataFrame:
         rv_df = \
             self.returns_read(cutoff_low=cutoff_low, cutoff_high=cutoff_high,

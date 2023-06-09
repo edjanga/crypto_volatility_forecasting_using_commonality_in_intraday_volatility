@@ -861,11 +861,14 @@ class PlotResults:
         if isinstance(models_excl, str):
             models_excl = [models_excl]
         query = f'SELECT \"y\",\"y_hat\",\"model\" FROM y_{L}_{PlotResults.cross_dd[cross]}_{transformation}'
-        y = pd.read_sql(con=PlotResults.db_connect_y, sql=query, index_col='timestamp') if not test \
-            else pd.read_csv(f'../model/y_{L}_{PlotResults.cross_dd[cross]}_{transformation}.csv',
-                             index_col='timestamp',
-                             date_parser=lambda x: pd.to_datetime(x, utc=True), usecols=['y', 'y_hat', 'timestamp',
-                                                                                           'model'])
+        try:
+            y = pd.read_sql(con=PlotResults.db_connect_y, sql=query, index_col='timestamp') if not test \
+                else pd.read_csv(f'../model/y_{L}_{PlotResults.cross_dd[cross]}_{transformation}.csv',
+                                 index_col='timestamp',
+                                 date_parser=lambda x: pd.to_datetime(x, utc=True), usecols=['y', 'y_hat', 'timestamp',
+                                                                                               'model'])
+        except:
+            pdb.set_trace()
         y = y.query(f'model not in {models_excl}') if models_excl else y
         y.index = pd.to_datetime(y.index)
         models_ls = y.model.unique().tolist()
@@ -951,31 +954,41 @@ if __name__ == '__main__':
     plot_results_obj = PlotResults()
     plot_results_obj.rolling_outliers(test=test, save=save)
     L = ['1D', '1W', '1M']
-    transformation = 'level'
-    cross_ls = [False]
+    cross_name_dd = {False: 'not_crossed', True: 'cross'}
+    transformation_dd = {None: 'level', 'log': 'log'}
+    transformation = 'log'
+    cross_ls = [True]
     shared_xaxes = True
+    models_excl = 'har_csr'
     for lookback in L:
-        for cross in cross_ls:
-            plot_results_obj.rolling_metrics_barplot(L=lookback, cross=cross, save=save, test=test,
-                                                     transformation=transformation)
+        for cross, _ in cross_name_dd.items():
+            for _, transformation_tag in transformation_dd.items():
+                plot_results_obj.rolling_metrics_barplot(L=lookback, cross=cross, save=save, test=test,
+                                                         transformation=transformation_tag, models_excl=models_excl)
     for lookback in L:
-        for cross in cross_ls:
-            plot_results_obj.scatterplot(L=lookback, cross=cross, save=save, shared_xaxes=shared_xaxes, test=test,
-                                         transformation=transformation)
+        for cross, _ in cross_name_dd.items():
+            for _, transformation_tag in transformation_dd.items():
+                plot_results_obj.scatterplot(L=lookback, cross=cross, save=save, shared_xaxes=shared_xaxes, test=test,
+                                             transformation=transformation_tag, models_excl=models_excl)
     for lookback in L:
-        for cross in cross_ls:
-            plot_results_obj.distribution(L=lookback, cross=cross, save=save, test=test, transformation=transformation)
+        for cross, _ in cross_name_dd.items():
+            for _, transformation_tag in transformation_dd.items():
+                plot_results_obj.distribution(L=lookback, cross=cross, save=save, test=test,
+                                              transformation=transformation_tag, models_excl=models_excl)
     for lookback in L:
-        for cross in cross_ls:
-            plot_results_obj.coefficient(L=lookback, cross=cross, save=save, test=test, transformation=transformation)
+        for cross, _ in cross_name_dd.items():
+            for _, transformation_tag in transformation_dd.items():
+                plot_results_obj.coefficient(L=lookback, cross=cross, save=save, test=test,
+                                             transformation=transformation_tag, models_excl=models_excl)
     """
         Close database
     """
     plot_results_obj.db_connect_coefficient.close()
     for lookback in L:
-        for cross in cross_ls:
-            plot_results_obj.rolling_metrics(L=lookback, cross=cross, save=save, test=test,
-                                             transformation=transformation)
+        for cross, _ in cross_name_dd.items():
+            for _, transformation_tag in transformation_dd.items():
+                plot_results_obj.rolling_metrics(L=lookback, cross=cross, save=save, test=test,
+                                                 transformation=transformation_tag, models_excl=models_excl)
     if not test:
         """
             Close databases
