@@ -70,7 +70,7 @@ class ModelBuilder:
     symbol_networks_dd = dict([(symbol, None) for _, symbol in enumerate(_coins)])
     models_networks_dd = \
         dict([(model, symbol_networks_dd) for _, model in enumerate(models) if model not in [None, 'har_universal']])
-    outliers_dd = {L: list() for _, L in enumerate(['1D', '1W', '1M'])}
+    outliers_dd = {L: list() for _, L in enumerate(['1H', '6H', '12H', '1D', '1W', '1M'])}
     _pairs = list(product(_coins, repeat=2))
     _pairs = [(syms[0], syms[-1]) for _, syms in enumerate(_pairs)]
     L_shift_dd = {'5T': pd.to_timedelta('5T') // pd.to_timedelta('5T'),
@@ -362,6 +362,7 @@ class ModelBuilder:
                     X_train.drop(intersection_date, inplace=True, axis=0)
                     y_train.dropna(inplace=True)
                     new_N = y_train.shape[0]
+                y_train = y_train.loc[X_train.index]
                 if not cross:
                     if self._model_type == 'har':
                         ModelBuilder.outliers_dd[self._L].append(new_N / old_N)
@@ -635,8 +636,8 @@ if __name__ == '__main__':
     rv = data_obj.rv_read()
     cdr = data_obj.cdr_read()
     csr = data_obj.csr_read()
-    F = ['1H', '6H', '12H']
-    L = '1D'
+    F = ['5T', '30T']#['1H', '6H', '12H']
+    L = '1H'
     models_ls = [None, 'har', 'har_dummy_markets', 'har_cdr']#,'har', har_dummy_markets 'har_cdr', 'har_universal']
     model_builder_obj = ModelBuilder(F=F, h='30T', L=L, Q='1D')
     model_builder_obj.models = models_ls
@@ -644,9 +645,9 @@ if __name__ == '__main__':
     agg = '1W'
     cross_name_dd = {False: 'not_crossed', True: 'cross'}
     transformation_dd = {None: 'level', 'log': 'log'}
-    test = True
+    test = False
     var_explained = .9
-    for L in ['1D', '1W', '1M']:
+    for L in ['1H']:#['1D', '1W', '1M']:
         F.append(L)
         model_builder_obj.L = L
         model_builder_obj.F = F
@@ -756,7 +757,7 @@ if __name__ == '__main__':
     outliers = pd.DataFrame(model_builder_obj.outliers_dd)
     outliers = pd.melt(outliers, var_name='L', value_name='values')
     outliers.to_csv('outliers.csv') if test else \
-        outliers.to_sql(con=model_builder_obj.outliers, name='outliers', if_exists='replace')
+        outliers.to_sql(con=model_builder_obj.db_connect_outliers, name='outliers', if_exists='replace')
     if not test:
         """
         Close databases

@@ -36,12 +36,12 @@ class Reader:
         return returns_df
 
     def rv_read(self, cutoff_low: float = .01, cutoff_high: float = .01, raw: bool=False,
-                symbol: typing.Union[typing.List[str], str]=None)\
+                symbol: typing.Union[typing.List[str], str] = None, variance: bool = False)\
             -> pd.DataFrame:
         rv_df = \
             self.returns_read(cutoff_low=cutoff_low, cutoff_high=cutoff_high,
                               raw=raw, resampled=False, symbol=symbol)**2
-        rv_df = rv_df.resample('5T').sum()#**.5
+        rv_df = rv_df.resample('5T').sum() if variance else rv_df.resample('5T').sum()**.5
         return rv_df
 
     def cdr_read(self, cutoff_low: float = .05, cutoff_high: float = .05) -> pd.DataFrame:

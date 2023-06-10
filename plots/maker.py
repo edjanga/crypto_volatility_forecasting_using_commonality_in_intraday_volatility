@@ -860,15 +860,12 @@ class PlotResults:
         """
         if isinstance(models_excl, str):
             models_excl = [models_excl]
-        query = f'SELECT \"y\",\"y_hat\",\"model\" FROM y_{L}_{PlotResults.cross_dd[cross]}_{transformation}'
-        try:
-            y = pd.read_sql(con=PlotResults.db_connect_y, sql=query, index_col='timestamp') if not test \
-                else pd.read_csv(f'../model/y_{L}_{PlotResults.cross_dd[cross]}_{transformation}.csv',
-                                 index_col='timestamp',
-                                 date_parser=lambda x: pd.to_datetime(x, utc=True), usecols=['y', 'y_hat', 'timestamp',
-                                                                                               'model'])
-        except:
-            pdb.set_trace()
+        query = f'SELECT \"y\",\"y_hat\",\"model\", \"timestamp\"' \
+                f' FROM y_{L}_{PlotResults.cross_dd[cross]}_{transformation}'
+        y = pd.read_sql(con=PlotResults.db_connect_y, sql=query, index_col='timestamp') if not test \
+            else pd.read_csv(f'../model/y_{L}_{PlotResults.cross_dd[cross]}_{transformation}.csv',
+                             date_parser=lambda x: pd.to_datetime(x, utc=True),
+                             index_col='timestamp', usecols=['y', 'y_hat', 'model', 'timestamp'])
         y = y.query(f'model not in {models_excl}') if models_excl else y
         y.index = pd.to_datetime(y.index)
         models_ls = y.model.unique().tolist()
@@ -898,12 +895,12 @@ class PlotResults:
         """
         Query data
         """
-        query = f'SELECT \"y\",\"y_hat\",\"model\" FROM y_{L}_{PlotResults.cross_dd[cross]}_{transformation}'
+        query = f'SELECT \"y\",\"y_hat\",\"model\", \"timestamp\"' \
+                f' FROM y_{L}_{PlotResults.cross_dd[cross]}_{transformation}'
         y = pd.read_sql(con=PlotResults.db_connect_y, sql=query, index_col='timestamp') if not test \
             else pd.read_csv(f'../model/y_{L}_{PlotResults.cross_dd[cross]}_{transformation}.csv',
-                             index_col='timestamp',
-                             date_parser = lambda x: pd.to_datetime(x, utc=True), usecols=['y', 'y_hat', 'timestamp',
-                                                                                           'model'])
+                             date_parser=lambda x: pd.to_datetime(x, utc=True),
+                             index_col='timestamp', usecols=['y', 'y_hat', 'model', 'timestamp'])
         y = y.query(f'model not in {models_excl}') if models_excl else y
         y.index = pd.to_datetime(y.index)
         models_ls = y.model.unique().tolist()
@@ -946,19 +943,19 @@ class PlotResults:
 
 if __name__ == '__main__':
 
-    save = True
-    test = True
+    save = False
+    test = False
     #eda_obj = EDA()
     #eda_obj.plot(save=save, feature='rv')
     #pdb.set_trace()
     plot_results_obj = PlotResults()
-    plot_results_obj.rolling_outliers(test=test, save=save)
-    L = ['1D', '1W', '1M']
+    # plot_results_obj.rolling_outliers(test=test, save=save)
+    L = ['1H']#['1D', '1W', '1M']
     cross_name_dd = {False: 'not_crossed', True: 'cross'}
     transformation_dd = {None: 'level', 'log': 'log'}
     transformation = 'log'
     cross_ls = [True]
-    shared_xaxes = True
+    shared_xaxes = False
     models_excl = 'har_csr'
     for lookback in L:
         for cross, _ in cross_name_dd.items():
