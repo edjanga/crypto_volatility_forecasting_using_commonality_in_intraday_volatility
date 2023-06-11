@@ -868,7 +868,6 @@ class PlotResults:
                              index_col='timestamp', usecols=['y', 'y_hat', 'model', 'timestamp'])
         y = y.query(f'model not in {models_excl}') if models_excl else y
         y.index = pd.to_datetime(y.index)
-        pdb.set_trace()
         models_ls = y.model.unique().tolist()
         col_grid = 1
         row_grid = len(models_ls) + 1
@@ -951,10 +950,10 @@ if __name__ == '__main__':
     #pdb.set_trace()
     plot_results_obj = PlotResults()
     # plot_results_obj.rolling_outliers(test=test, save=save)
-    L = ['1W']#['1D', '1W', '1M']
-    cross_name_dd = {True: 'cross'}#{False: 'not_crossed', True: 'cross'}
-    transformation_dd = {None: 'level', 'log': 'log'}
-    transformation = 'log'
+    L = ['1D', '1W', '1M']
+    cross_name_dd = {False: 'not_cross'}#{False: 'not_crossed', True: 'cross'}
+    transformation_dd = {None: 'level'}#, 'log': 'log'}
+    #transformation = 'log'
     cross_ls = [True]
     shared_xaxes = False
     models_excl = 'har_csr'
@@ -973,11 +972,11 @@ if __name__ == '__main__':
             for _, transformation_tag in transformation_dd.items():
                 plot_results_obj.distribution(L=lookback, cross=cross, save=save, test=test,
                                               transformation=transformation_tag, models_excl=models_excl)
-    for lookback in L:
-        for cross, _ in cross_name_dd.items():
-            for _, transformation_tag in transformation_dd.items():
-                plot_results_obj.coefficient(L=lookback, cross=cross, save=save, test=test,
-                                             transformation=transformation_tag, models_excl=models_excl)
+    # for lookback in L:
+    #     for cross, _ in cross_name_dd.items():
+    #         for _, transformation_tag in transformation_dd.items():
+    #             plot_results_obj.coefficient(L=lookback, cross=cross, save=save, test=test,
+    #                                          transformation=transformation_tag, models_excl=models_excl)
     """
         Close database
     """

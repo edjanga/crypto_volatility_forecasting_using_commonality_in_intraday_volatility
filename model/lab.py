@@ -455,10 +455,10 @@ class ModelBuilder:
             y_hat = coefficient.mul(exog).sum(axis=1)
             y.append(pd.concat([endog, y_hat], axis=1))
         y = pd.concat(y).resample(self._s).last() if self._model_type != 'har_universal' \
-            else pd.concat(y).groupby(by=[pd.Grouper(level=-1), pd.Grouper(level=0, freq=self._s)]).last()
+            else pd.concat(y).groupby(by=[pd.Grouper(level=-1), pd.Grouper(level=0)]).last()
         y = y.swaplevel(i='timestamp', j='symbol') if self._model_type == 'har_universal' else y
-        tmp = y.groupby(by=pd.Grouper(level=0, freq='1D')) if self._model_type != 'har_universal' else \
-            y.groupby(by=[pd.Grouper(level=-1), pd.Grouper(level=0, freq='1D')])
+        tmp = y.groupby(by=pd.Grouper(level=0, freq=kwargs['agg'])) if self._model_type != 'har_universal' else \
+        y.groupby(by=[pd.Grouper(level=-1), pd.Grouper(level=0, freq=kwargs['agg'])])
         mse = tmp.apply(lambda x: mean_squared_error(x.iloc[:, 0], x.iloc[:, -1]))
         qlike = tmp.apply(qlike_score)
         r2 = tmp.apply(lambda x: r2_score(x.iloc[:, 0], x.iloc[:, -1]))
@@ -680,13 +680,13 @@ if __name__ == '__main__':
     csr = data_obj.csr_read()
     F = ['1H', '6H', '12H']
     L = '1D'
-    models_ls = [None, 'har']#, 'har_dummy_markets', 'har_cdr',]#, 'har_universal']
+    models_ls = [None, 'har', 'har_dummy_markets', 'har_cdr', 'har_universal']
     regression_type = 'linear'#'ensemble'
     model_builder_obj = ModelBuilder(F=F, h='30T', L=L, Q='1D')
     model_builder_obj.models = models_ls
     print(model_builder_obj.models)
-    agg = '1D'
-    cross_name_dd = {True: 'cross'}#{False: 'not_crossed', True: 'cross'}
+    agg = '1W'
+    cross_name_dd = {False: 'not_crossed'}#, True: 'cross'}
     transformation_dd = {None: 'level'}#{None: 'level', 'log': 'log'}
     test = False
     var_explained = .9
