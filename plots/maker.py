@@ -950,8 +950,8 @@ if __name__ == '__main__':
     #pdb.set_trace()
     plot_results_obj = PlotResults()
     # plot_results_obj.rolling_outliers(test=test, save=save)
-    L = ['1H']#['1D', '1W', '1M']
-    cross_name_dd = {False: 'not_crossed', True: 'cross'}
+    L = ['1W']#['1D', '1W', '1M']
+    cross_name_dd = {True: 'cross'}#{False: 'not_crossed', True: 'cross'}
     transformation_dd = {None: 'level', 'log': 'log'}
     transformation = 'log'
     cross_ls = [True]
