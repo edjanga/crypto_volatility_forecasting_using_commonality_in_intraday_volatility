@@ -365,14 +365,14 @@ class ModelBuilder:
                     X_train.drop(X_train.loc[X_train.isnull().sum(axis=1) > 0].index, inplace=True, axis=0)
                 if self._model_type != 'har_universal':
                     y_train.where(
-                        ((y_train <= y_train.quantile(.75) + 1.5 * (y_train.quantile(.75) - y_train.quantile(.25))) &
-                         (y_train >= y_train.quantile(.25) - 1.5 * (y_train.quantile(.75) - y_train.quantile(.25)))),
+                        ((y_train < y_train.quantile(.75) + 1.5 * (y_train.quantile(.75) - y_train.quantile(.25))) &
+                         (y_train > y_train.quantile(.25) - 1.5 * (y_train.quantile(.75) - y_train.quantile(.25)))),
                         inplace=True)
                 else:
                     y_train = \
                         y_train.groupby(by=pd.Grouper(level=1), group_keys=True).apply(
-                            lambda x: x.where((x <= x.quantile(.75) + 1.5 * (x.quantile(.75) - x.quantile(.25))) &
-                                              (x >= x.quantile(.25) - 1.5 * (x.quantile(.75) - x.quantile(.25)))))
+                            lambda x: x.where((x < x.quantile(.75) + 1.5 * (x.quantile(.75) - x.quantile(.25))) &
+                                              (x > x.quantile(.25) - 1.5 * (x.quantile(.75) - x.quantile(.25)))))
                     y_train = y_train.droplevel(axis=0, level=0)
                 old_N = X_train.shape[0]
                 new_N = y_train.shape[0]
@@ -425,7 +425,7 @@ class ModelBuilder:
                 test_date = (date + ModelBuilder.start_dd['1D']).date()
                 X_test, y_test = exog.loc[test_date.strftime('%Y-%m-%d'), :], endog.loc[test_date.strftime('%Y-%m-%d')]
                 y_test = y_test if isinstance(y_test, pd.Series) else y_test.iloc[:, 0]
-                X_test = X_test.assign(const=1) if not cross else X_test
+                X_test = X_test.assign(const=1) if regression_type == 'linear' else X_test
                 X_test.replace(np.inf, np.nan, inplace=True)
                 X_test.replace(-np.inf, np.nan, inplace=True)
                 y_test.replace(np.inf, np.nan, inplace=True)
@@ -474,30 +474,13 @@ class ModelBuilder:
             qlike = qlike.groupby(by=[pd.Grouper(level=-1),
                                       pd.Grouper(level=0,
                                                  freq=kwargs['agg'])]).mean().groupby(by=pd.Grouper(level=-1)).mean()
-            pdb.set_trace()
-        # y.loc[(y.index.get_level_values(0) > pd.to_datetime(r2.idxmin().date(), utc=True)) & (
-        # (y.index.get_level_values(0) < pd.to_datetime(r2.idxmin().date() + relativedelta(days=1), utc=True))), :]
         else:
             mse = mse.resample(kwargs['agg']).sum()
             qlike = qlike.resample(kwargs['agg']).mean()
             r2 = r2.resample(kwargs['agg']).mean()
-        try:
-            mse = tmp.apply(lambda x: mean_squared_error(x.iloc[:, 0], x.iloc[:, -1]))#.resample(kwargs['agg']).sum()
-        except TypeError:
-            pdb.set_trace()
         mse = pd.Series(mse, name=symbol)
-        #qlike = tmp.apply(qlike_score)#.resample(kwargs['agg']).mean()
         qlike = pd.Series(qlike, name=symbol)
-        #r2 = tmp.apply(lambda x: r2_score(x.iloc[:, 0], x.iloc[:, -1]))#.resample(kwargs['agg']).mean()
         r2 = pd.Series(r2, name=symbol)
-        # if self._model_type != 'har_universal':
-        #     mse = mse.resample(kwargs['agg']).mean()
-        #     qlike = qlike.resample(kwargs['agg']).mean()
-        #     r2 = r2.resample(kwargs['agg']).mean()
-        # else:
-        #     mse = mse.groupby(by=[pd.Grouper(level=-1, freq=kwargs['agg'])]).mean()
-        #     qlike = qlike.groupby(by=[pd.Grouper(level=-1, freq=kwargs['agg'])]).mean()
-        #     r2 = r2.groupby(by=[pd.Grouper(level=-1, freq=kwargs['agg'])]).mean()
         coefficient.ffill(inplace=True)
         coefficient.dropna(inplace=True)
         # tstats.ffill(inplace=True)
@@ -695,10 +678,10 @@ if __name__ == '__main__':
     rv = data_obj.rv_read()
     cdr = data_obj.cdr_read()
     csr = data_obj.csr_read()
-    F = ['1H', '6H', '12H', '1D']
-    L = '1W'
+    F = ['1H', '6H', '12H']
+    L = '1D'
     models_ls = [None, 'har']#, 'har_dummy_markets', 'har_cdr',]#, 'har_universal']
-    regression_type = 'ensemble'#'linear'
+    regression_type = 'linear'#'ensemble'
     model_builder_obj = ModelBuilder(F=F, h='30T', L=L, Q='1D')
     model_builder_obj.models = models_ls
     print(model_builder_obj.models)
@@ -707,7 +690,7 @@ if __name__ == '__main__':
     transformation_dd = {None: 'level'}#{None: 'level', 'log': 'log'}
     test = False
     var_explained = .9
-    for L in ['1W']:#, '1W', '1M']:
+    for L in ['1D', '1W', '1M']:
         F.append(L)
         model_builder_obj.L = L
         model_builder_obj.F = F

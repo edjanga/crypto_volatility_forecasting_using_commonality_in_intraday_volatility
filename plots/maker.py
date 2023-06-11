@@ -868,6 +868,7 @@ class PlotResults:
                              index_col='timestamp', usecols=['y', 'y_hat', 'model', 'timestamp'])
         y = y.query(f'model not in {models_excl}') if models_excl else y
         y.index = pd.to_datetime(y.index)
+        pdb.set_trace()
         models_ls = y.model.unique().tolist()
         col_grid = 1
         row_grid = len(models_ls) + 1
