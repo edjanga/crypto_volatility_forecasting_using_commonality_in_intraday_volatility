@@ -333,6 +333,8 @@ class FeatureHARUniversal(FeatureBuilderBase):
 
 class FeatureHARUniversalPuzzle(FeatureBuilderBase):
 
+    label_encoder_obj = LabelEncoder()
+
     def __init__(self):
         super().__init__('har_universal_puzzle')
 
@@ -349,4 +351,8 @@ class FeatureHARUniversalPuzzle(FeatureBuilderBase):
         X = X.set_index(['symbol', 'timestamp']).sort_index(level=0)
         rv_universal_crossed_df = pd.concat([y, X], axis=1).dropna()
         rv_universal_crossed_df = rv_universal_crossed_df.swaplevel(i='timestamp', j='symbol')
+        rv_universal_crossed_df.index = \
+            rv_universal_crossed_df.index.set_levels(
+                FeatureHARUniversalPuzzle.label_encoder_obj.fit_transform(
+                    rv_universal_crossed_df.index.levels[1]), level=1)
         return rv_universal_crossed_df

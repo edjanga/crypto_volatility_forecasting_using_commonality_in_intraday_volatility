@@ -950,7 +950,7 @@ class PlotResults:
 if __name__ == '__main__':
 
     save = False
-    test = False
+    test = True
     #eda_obj = EDA()
     #eda_obj.plot(save=save, feature='rv')
     #pdb.set_trace()

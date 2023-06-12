@@ -702,9 +702,9 @@ if __name__ == '__main__':
     rv = data_obj.rv_read()
     cdr = data_obj.cdr_read()
     csr = data_obj.csr_read()
-    F = ['1H', '6H', '12H', '1D']
+    F = ['1H', '6H', '12H']
     L = '1W'
-    models_ls = [None, 'har_universal'] #, 'har', 'har_dummy_markets', 'har_cdr',
+    models_ls = [None, 'har', 'har_dummy_markets', 'har_cdr', 'har_universal']
     regression_type = 'linear'
     model_builder_obj = ModelBuilder(F=F, h='30T', L=L, Q='1D')
     model_builder_obj.models = models_ls
@@ -712,9 +712,9 @@ if __name__ == '__main__':
     agg = '1W'
     cross_name_dd = {True: 'cross'}#False: 'not_crossed', True: 'cross'}
     transformation_dd = {None: 'level'}#{None: 'level', 'log': 'log'}
-    test = False
+    test = True
     var_explained = .9
-    for L in ['1W', '1M']:
+    for L in ['1D', '1W', '1M']:
         F.append(L)
         model_builder_obj.L = L
         model_builder_obj.F = F
@@ -773,11 +773,13 @@ if __name__ == '__main__':
                         axis=model_axis_dd[model]), columns=[model])
                      for model in model_builder_obj.models_rolling_metrics_dd.keys() if model
                      and isinstance(model_builder_obj.models_rolling_metrics_dd[model]['coefficient'], pd.DataFrame)]
-                if not cross:
+                if cross & (model_specific_features._model_type != 'har_universal'):
+                    pass
+                else:
                     coefficient = pd.concat(coefficient, axis=1)
                     model_specific_features = list(set(coefficient.index).difference((set(['const']+F))))
                     model_specific_features.sort()
-                    coefficient = coefficient.T[['const']+F+model_specific_features].T# if not cross else coefficient.T[['const']+model_specific_features].T
+                    coefficient = coefficient.T[['const']+F+model_specific_features].T #if \not cross else coefficient.T[['const']+model_specific_features].T
                     coefficient.index.name = 'params'
                     coefficient = pd.melt(coefficient.reset_index(), value_name='value', var_name='model',
                                           id_vars='params')
