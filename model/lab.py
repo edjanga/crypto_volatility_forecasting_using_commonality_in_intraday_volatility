@@ -19,7 +19,7 @@ from itertools import product
 from scipy.stats import t
 import sqlite3
 from feature_engineering_room import FeatureCovariance, FeatureRiskMetricsEstimator, FeatureHAR, FeatureHARDummy, \
-    FeatureHARCDR, FeatureHARCSR, FeatureHARUniversal, FeatureHARUniversalPuzzle
+    FeatureHARCDR, FeatureHARCSR, FeatureHARUniversal, FeatureHARUniversalPuzzle, rv_1w_correction
 import matplotlib.pyplot as plt
 from datetime import datetime
 
@@ -35,10 +35,10 @@ def group_members_external_df(df: pd.DataFrame, df2: pd.DataFrame, drop_symbol: 
         return df.mul(df2)
 
 
-def rv_1w_correction(df: pd.DataFrame, L: str='1W') -> pd.DataFrame:
-    feature_name = df.filter(regex=f'_{L}').columns[0]
-    df.loc[:, feature_name] = df.loc[:, feature_name].value_counts().sort_values(ascending=False).index[0]
-    return df
+# def rv_1w_correction(df: pd.DataFrame, L: str='1W') -> pd.DataFrame:
+#     feature_name = df.filter(regex=f'_{L}').columns[0]
+#     df.loc[:, feature_name] = df.loc[:, feature_name].value_counts().sort_values(ascending=False).index[0]
+#     return df
 
 
 class ModelBuilder:
@@ -49,7 +49,7 @@ class ModelBuilder:
                               'har_dummy_markets': FeatureHARDummy(),
                               'har_cdr': FeatureHARCDR(),
                               'har_csr': FeatureHARCSR(),
-                              'har_universal': FeatureHARUniversal()}
+                              'har_universal': {False: FeatureHARUniversal(), True: FeatureHARUniversalPuzzle()}}
     _params_grid_dd = {'n_estimators': [100, 500, 1_000],
                        'lambda': np.linspace(0, 1, 11).tolist(),
                        'max_depth': [int(depth) for depth in np.linspace(1, 6, 6).tolist()],
@@ -254,11 +254,14 @@ class ModelBuilder:
         else:
             return covariance
 
-    def getting_data(self, symbol: typing.Union[typing.Tuple[str], str], transformation: str = None,
+    def getting_data(self, symbol: typing.Union[typing.Tuple[str], str, None], transformation: str = None,
                      **kwargs) -> pd.DataFrame:
         if isinstance(symbol, str):
             symbol = (symbol, symbol)
-        feature_obj = ModelBuilder._factory_model_type_dd[self._model_type]
+        if self._model_type != 'har_universal':
+            feature_obj = ModelBuilder._factory_model_type_dd[self._model_type]
+        else:
+            feature_obj = ModelBuilder._factory_model_type_dd[self._model_type][kwargs['cross']]
         if self._model_type in ['har', 'har_dummy_markets', 'risk_metrics']:
             data = feature_obj.builder(symbol=symbol, df=kwargs['df'], F=self._F)
         elif self._model_type in ['har_csr', 'har_cdr']:
@@ -294,21 +297,20 @@ class ModelBuilder:
             raise ValueError('Model type not available')
         else:
             y_series_test_name_dd = {True: 'RV', False: symbol}
-            if not cross:
-                data = self.getting_data(symbol, transformation, **kwargs)
-                endog = data.pop(symbol) if self._model_type != 'har_universal' else data.pop('RV')
-                endog.replace(0, np.nan, inplace=True)
-                endog.ffill(inplace=True)
-                exog = data
-                exog = self.clean_exog(exog, symbol) if self._model_type != 'har_universal' else exog
-            else:
-                exog = ModelBuilder.models_networks_dd[self._model_type][symbol]
+            exog = ModelBuilder.models_networks_dd[self._model_type][symbol] if \
+                (self._model_type != 'har_universal') & cross else self.getting_data(symbol, transformation, **kwargs)
+            if cross & (self._model_type != 'har_universal'):
                 endog = ModelBuilder.reader_obj.rv_read(symbol=symbol)
+            else:
+                exog = self.clean_exog(exog, symbol) if self._model_type != 'har_universal' else exog
+                endog = exog.pop(symbol) if self._model_type != 'har_universal' else exog.pop('RV')
+            endog.replace(0, np.nan, inplace=True)
+            endog.ffill(inplace=True)
+            if (transformation == 'log') & ((exog < 0).sum().sum() > 0):
                 original_min = abs(exog.min().min())
                 negative_value_in_exog = (exog < 0).sum().sum() > 0
-                if (transformation == 'log') & ((exog < 0).sum().sum() > 0):
-                    exog = exog + original_min
-                    endog = endog + original_min
+                exog = exog + original_min
+                endog = endog + original_min
                 exog = pd.DataFrame(data=np.vectorize(
                     ModelBuilder._factory_transformation_dd[transformation]['transformation'])(exog.values),
                                     index=exog.index, columns=exog.columns)
@@ -317,7 +319,34 @@ class ModelBuilder:
                     ModelBuilder._factory_transformation_dd[transformation]['transformation'])
                 (endog.values), index=endog.index, columns=endog.columns)
                 endog = endog - original_min if ((transformation == 'log') & negative_value_in_exog & cross) else endog
-            feature_obj = ModelBuilder._factory_model_type_dd[self._model_type]
+            #
+            # if not cross:
+            #     data = self.getting_data(symbol, transformation, **kwargs)
+            #     endog = data.pop(symbol) if self._model_type != 'har_universal' else data.pop('RV')
+            #     endog.replace(0, np.nan, inplace=True)
+            #     endog.ffill(inplace=True)
+            #     exog = data
+            #     exog = self.clean_exog(exog, symbol) if self._model_type != 'har_universal' else exog
+            # else:
+            #     if self._model_type != 'har_universal':
+            #         exog = ModelBuilder.models_networks_dd[self._model_type][symbol]
+            #         endog = ModelBuilder.reader_obj.rv_read(symbol=symbol)
+            #     else:
+            #         pdb.set_trace()
+            #     original_min = abs(exog.min().min())
+            #     negative_value_in_exog = (exog < 0).sum().sum() > 0
+            #     if (transformation == 'log') & ((exog < 0).sum().sum() > 0):
+            #         exog = exog + original_min
+            #         endog = endog + original_min
+            #     exog = pd.DataFrame(data=np.vectorize(
+            #         ModelBuilder._factory_transformation_dd[transformation]['transformation'])(exog.values),
+            #                         index=exog.index, columns=exog.columns)
+            #     exog = exog - original_min if ((transformation == 'log') & negative_value_in_exog & cross) else exog
+            #     endog = pd.DataFrame(data=np.vectorize(
+            #         ModelBuilder._factory_transformation_dd[transformation]['transformation'])
+            #     (endog.values), index=endog.index, columns=endog.columns)
+            #     endog = endog - original_min if ((transformation == 'log') & negative_value_in_exog & cross) else endog
+        feature_obj = ModelBuilder._factory_model_type_dd[self._model_type]
         regression = ModelBuilder._factory_regression_dd[regression_type]
         idx_ls = set(exog.index) if self._model_type != 'har_universal' else set(exog.index.get_level_values(0))
         idx_ls = list(idx_ls)
@@ -350,7 +379,6 @@ class ModelBuilder:
                                             (exog.index.get_level_values(0) < pd.to_datetime(date, utc=True))],\
                     endog.loc[(endog.index.get_level_values(0) >= start) &
                               (endog.index.get_level_values(0) < pd.to_datetime(date, utc=True))]
-
                 X_train.dropna(inplace=True)
                 y_train.dropna(inplace=True)
                 X_train.replace(np.inf, np.nan, inplace=True)
@@ -365,14 +393,14 @@ class ModelBuilder:
                     X_train.drop(X_train.loc[X_train.isnull().sum(axis=1) > 0].index, inplace=True, axis=0)
                 if self._model_type != 'har_universal':
                     y_train.where(
-                        ((y_train < y_train.quantile(.75) + 1.5 * (y_train.quantile(.75) - y_train.quantile(.25))) &
-                         (y_train > y_train.quantile(.25) - 1.5 * (y_train.quantile(.75) - y_train.quantile(.25)))),
+                        ((y_train <= y_train.quantile(.75) + 1.5 * (y_train.quantile(.75) - y_train.quantile(.25))) &
+                         (y_train >= y_train.quantile(.25) - 1.5 * (y_train.quantile(.75) - y_train.quantile(.25)))),
                         inplace=True)
                 else:
                     y_train = \
                         y_train.groupby(by=pd.Grouper(level=1), group_keys=True).apply(
-                            lambda x: x.where((x < x.quantile(.75) + 1.5 * (x.quantile(.75) - x.quantile(.25))) &
-                                              (x > x.quantile(.25) - 1.5 * (x.quantile(.75) - x.quantile(.25)))))
+                            lambda x: x.where((x <= x.quantile(.75) + 1.5 * (x.quantile(.75) - x.quantile(.25))) &
+                                              (x >= x.quantile(.25) - 1.5 * (x.quantile(.75) - x.quantile(.25)))))
                     y_train = y_train.droplevel(axis=0, level=0)
                 old_N = X_train.shape[0]
                 new_N = y_train.shape[0]
@@ -395,8 +423,6 @@ class ModelBuilder:
                 else:
                     if self._model_type != 'har_universal':
                         ModelBuilder.outliers_dd[self._L].append(new_N / old_N)
-                    else:
-                        pdb.set_trace()
                 if cross and regression_type != 'linear':
                     """
                         Retrain XGBoost in the first iteration or once per month (as time consuming to train everyday)
@@ -569,8 +595,6 @@ class ModelBuilder:
                     elif self._model_type in ['har_cdr', 'har_csr']:
                         self.fill_model_network(symbol=symbol, transformation=transformation,
                                                 variance_explained=kwargs['variance_explained'], df2=kwargs['df2'])
-            else:
-                pdb.set_trace()
         if self._model_type != 'har_universal':
             coin_ls = set(self.coins).intersection(set(kwargs['df'].columns))
             coin_ls = list(coin_ls)
@@ -617,7 +641,7 @@ class ModelBuilder:
         else:
             mse, qlike, r2, coefficient = \
                 self.rolling_metrics(symbol=None, regression_type=regression_type, transformation=transformation,
-                                     **kwargs) #, tstats, pvalues
+                                     cross=cross, **kwargs) #, tstats, pvalues
             mse_dd['mse'] = mse
             qlike_dd['qlike'] = qlike
             r2_dd['r2'] = r2
@@ -678,19 +702,19 @@ if __name__ == '__main__':
     rv = data_obj.rv_read()
     cdr = data_obj.cdr_read()
     csr = data_obj.csr_read()
-    F = ['1H', '6H', '12H']
-    L = '1D'
-    models_ls = [None, 'har', 'har_dummy_markets', 'har_cdr', 'har_universal']
-    regression_type = 'linear'#'ensemble'
+    F = ['1H', '6H', '12H', '1D']
+    L = '1W'
+    models_ls = [None, 'har_universal'] #, 'har', 'har_dummy_markets', 'har_cdr',
+    regression_type = 'linear'
     model_builder_obj = ModelBuilder(F=F, h='30T', L=L, Q='1D')
     model_builder_obj.models = models_ls
     print(model_builder_obj.models)
     agg = '1W'
-    cross_name_dd = {False: 'not_crossed'}#, True: 'cross'}
+    cross_name_dd = {True: 'cross'}#False: 'not_crossed', True: 'cross'}
     transformation_dd = {None: 'level'}#{None: 'level', 'log': 'log'}
     test = False
     var_explained = .9
-    for L in ['1D', '1W', '1M']:
+    for L in ['1W', '1M']:
         F.append(L)
         model_builder_obj.L = L
         model_builder_obj.F = F

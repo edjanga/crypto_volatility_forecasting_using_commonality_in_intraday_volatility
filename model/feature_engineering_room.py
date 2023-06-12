@@ -1,3 +1,4 @@
+import pdb
 import typing
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
@@ -7,21 +8,39 @@ from datetime import time
 import numpy as np
 from data_centre.data import Reader
 
-"""Functions used to facilitate computation within classes."""
+
+"""Functions and variables used to facilitate computation within classes."""
+L_shift_dd = dict([('5T', pd.to_timedelta('5T')//pd.to_timedelta('5T')),
+                   ('30T', pd.to_timedelta('30T') // pd.to_timedelta('5T')),
+                   ('1H', pd.to_timedelta('1H')//pd.to_timedelta('5T')),
+                   ('6H', pd.to_timedelta('6H')//pd.to_timedelta('5T')),
+                   ('12H', pd.to_timedelta('12H')//pd.to_timedelta('5T')),
+                   ('1D', pd.to_timedelta('1D')//pd.to_timedelta('5T')),
+                   ('1W', lambda x:x.resample('1W').mean()), ('1M', lambda x:x.resample('30D').mean())])
+
+
 def har_features_puzzle(df: pd.DataFrame, F: typing.Union[str, typing.List[str]], own=True) -> pd.DataFrame:
     symbol = df.symbol.unique()[0]
     for _, lookback in enumerate(F):
-        shift = \
-            pd.to_timedelta(lookback)//pd.to_timedelta('5T') if \
-                'M' not in lookback else pd.to_timedelta('30D')//pd.to_timedelta('5T')
-        tmp = df['rv']
-        tmp.name = lookback if own else '_'.join((symbol, lookback))
-        df = df.join(tmp.shift(shift), how='left')
-    df.drop('rv', axis=1, inplace=True)
+        tmp = df['RV']
+        tmp.name = '_'.join(('RV', lookback)) if own else '_'.join((symbol, lookback))
+        if pd.to_timedelta(lookback)//pd.to_timedelta('5T') <= 288:
+            offset = pd.to_timedelta(lookback)//pd.to_timedelta('5T')
+            df = df.join(tmp.shift(offset), how='left', rsuffix=f'_{lookback}')
+        else:
+            df = df.join(L_shift_dd[lookback](tmp).shift(1), how='left', rsuffix=f'_{lookback}')
+    df.ffill(inplace=True)
+    df.drop('RV', axis=1, inplace=True)
     df.dropna(inplace=True)
     df = df.reset_index().set_index(['symbol', 'timestamp'])
     if not own:
         df = df.droplevel(axis=0, level=0)
+    return df
+
+
+def rv_1w_correction(df: pd.DataFrame, L: str='1W') -> pd.DataFrame:
+    feature_name = df.filter(regex=f'_{L}').columns[0]
+    df.loc[:, feature_name] = df.loc[:, feature_name].value_counts().sort_values(ascending=False).index[0]
     return df
 
 
@@ -319,14 +338,15 @@ class FeatureHARUniversalPuzzle(FeatureBuilderBase):
 
     def builder(self, df: pd.DataFrame, F: typing.Union[str, typing.List[str]]) -> pd.DataFrame:
         y = df.unstack()
-        y.name = 'Target'
+        y.name = 'RV'
         global X
         X = \
             pd.melt(df, ignore_index=False,
-                    value_name='rv', var_name='symbol').groupby(by='symbol', group_keys=True)
+                    value_name='RV', var_name='symbol').groupby(by='symbol', group_keys=True)
         own = pd.concat([har_features_puzzle(X.get_group(group), F) for group in X.groups])
         row = pd.concat([har_features_puzzle(X.get_group(group), F, own=False) for group in X.groups], axis=1)
         X = own.reset_index().set_index('timestamp').join(row, how='left').reset_index()
         X = X.set_index(['symbol', 'timestamp']).sort_index(level=0)
         rv_universal_crossed_df = pd.concat([y, X], axis=1).dropna()
+        rv_universal_crossed_df = rv_universal_crossed_df.swaplevel(i='timestamp', j='symbol')
         return rv_universal_crossed_df

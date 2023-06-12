@@ -710,7 +710,8 @@ class PlotResults:
 
     @staticmethod
     def coefficient(L: str, cross: bool, save: bool, transformation: str, test: bool = False,
-                    models_excl: typing.Union[None, typing.List[str], str] = 'har_csr'):
+                    models_excl: typing.Union[None, typing.List[str], str] = 'har_csr',
+                    regression_type: str = 'linear'):
         if isinstance(models_excl, str):
             models_excl = [models_excl]
         """
@@ -726,12 +727,14 @@ class PlotResults:
         fig_title = f'Coefficient {L} {PlotResults.cross_dd[cross]} {transformation}: Bar plot'
         fig = px.bar(coefficient, x='params', y='value', color='model', barmode='group', title=fig_title)
         if save:
-            fig.write_image(os.path.abspath(f'./coefficient_{L}_{PlotResults.cross_dd[cross]}_{transformation}.png'))
+            fig.write_image(os.path.abspath(f'./coefficient_{L}_{PlotResults.cross_dd[cross]}_{transformation}_'
+                                            f'{regression_type}.png'))
         fig.show()
 
     @staticmethod
     def rolling_metrics(L: str, cross: bool, save: bool, transformation: str, test: bool = False,
-                        models_excl: typing.Union[str, typing.List[str], None] = 'har_csr'):
+                        models_excl: typing.Union[str, typing.List[str], None] = 'har_csr',
+                        regression_type: str = 'linear'):
         if isinstance(models_excl, str):
             models_excl = [models_excl]
         """
@@ -775,13 +778,13 @@ class PlotResults:
                 fig.update_layout(height=1500, width=1200, title={'text': fig_title})
         if save:
             fig.write_image(os.path.abspath(
-                f'./rolling_metrics_{L}_{PlotResults.cross_dd[cross]}_{transformation}.png'))
+                f'./rolling_metrics_{L}_{PlotResults.cross_dd[cross]}_{transformation}_{regression_type}.png'))
         fig.show()
 
     @staticmethod
     def rolling_metrics_barplot(L: str, cross: bool, save: bool, transformation: str,
                                 models_excl: typing.Union[str, typing.List[str], None] = 'har_csr', mean: bool = True,
-                                test: bool = False):
+                                test: bool = False, regression_type: str = 'linear'):
         if isinstance(models_excl, str):
             models_excl = [models_excl]
         """
@@ -848,13 +851,14 @@ class PlotResults:
         mean_dd = {True:'mean', False: 'witout_mean'}
         if save:
             fig.write_image(os.path.abspath(f'./rolling_metrics_bar_plot_{L}_'
-                                            f'{PlotResults.cross_dd[cross]}_{mean_dd[mean]}_{transformation}.png'))
+                                            f'{PlotResults.cross_dd[cross]}_{mean_dd[mean]}_{transformation}_'
+                                            f'{regression_type}.png'))
         fig.show()
 
     @staticmethod
     def scatterplot(L: str, cross: bool, save: bool, transformation: str,
                     models_excl: typing.Union[str, typing.List[str], None] = 'har_csr',
-                    shared_xaxes=True, test: bool=False):
+                    shared_xaxes=True, test: bool=False, regression_type: str = 'linear'):
         """
         Query data
         """
@@ -883,12 +887,14 @@ class PlotResults:
         fig.update_xaxes(title_text='Observed')
         fig.update_layout(height=1500, width=1200, title={'text': fig_title})
         if save:
-            fig.write_image(os.path.abspath(f'./scatter_plot_{L}_{PlotResults.cross_dd[cross]}_{transformation}.png'))
+            fig.write_image(os.path.abspath(f'./scatter_plot_{L}_{PlotResults.cross_dd[cross]}_'
+                                            f'{transformation}_{regression_type}.png'))
         fig.show()
 
     @staticmethod
     def distribution(L: str, cross: bool, save: bool, transformation: str, test: bool=False,
-                     models_excl: typing.Union[None, str, typing.List[str]] = 'har_csr'):
+                     models_excl: typing.Union[None, str, typing.List[str]] = 'har_csr',
+                     regression_type: str = 'linear'):
         colors_ls = px.colors.qualitative.Plotly
         if isinstance(models_excl, str):
             models_excl = [models_excl]
@@ -921,7 +927,7 @@ class PlotResults:
         fig.update_traces(opacity=0.75)
         if save:
             fig.write_image(os.path.abspath(
-                f'./distributions_y_vs_y_hat{L}_{PlotResults.cross_dd[cross]}_{transformation}.png'))
+                f'./distributions_y_vs_y_hat{L}_{PlotResults.cross_dd[cross]}_{transformation}_{regression_type}.png'))
         fig.show()
 
     @staticmethod
@@ -951,8 +957,9 @@ if __name__ == '__main__':
     plot_results_obj = PlotResults()
     # plot_results_obj.rolling_outliers(test=test, save=save)
     L = ['1D', '1W', '1M']
-    cross_name_dd = {False: 'not_cross'}#{False: 'not_crossed', True: 'cross'}
+    cross_name_dd = {False: 'not_crossed', True: 'cross'}
     transformation_dd = {None: 'level'}#, 'log': 'log'}
+    regression_type = 'linear'
     #transformation = 'log'
     cross_ls = [True]
     shared_xaxes = False
@@ -961,22 +968,26 @@ if __name__ == '__main__':
         for cross, _ in cross_name_dd.items():
             for _, transformation_tag in transformation_dd.items():
                 plot_results_obj.rolling_metrics_barplot(L=lookback, cross=cross, save=save, test=test,
-                                                         transformation=transformation_tag, models_excl=models_excl)
+                                                         transformation=transformation_tag, models_excl=models_excl,
+                                                         regression_type=regression_type)
     for lookback in L:
         for cross, _ in cross_name_dd.items():
             for _, transformation_tag in transformation_dd.items():
                 plot_results_obj.scatterplot(L=lookback, cross=cross, save=save, shared_xaxes=shared_xaxes, test=test,
-                                             transformation=transformation_tag, models_excl=models_excl)
+                                             transformation=transformation_tag, models_excl=models_excl,
+                                             regression_type=regression_type)
     for lookback in L:
         for cross, _ in cross_name_dd.items():
             for _, transformation_tag in transformation_dd.items():
                 plot_results_obj.distribution(L=lookback, cross=cross, save=save, test=test,
-                                              transformation=transformation_tag, models_excl=models_excl)
+                                              transformation=transformation_tag, models_excl=models_excl,
+                                              regression_type=regression_type)
     # for lookback in L:
     #     for cross, _ in cross_name_dd.items():
     #         for _, transformation_tag in transformation_dd.items():
     #             plot_results_obj.coefficient(L=lookback, cross=cross, save=save, test=test,
-    #                                          transformation=transformation_tag, models_excl=models_excl)
+    #                                          transformation=transformation_tag, models_excl=models_excl,
+    #                                          regression_type=regression_type)
     """
         Close database
     """
