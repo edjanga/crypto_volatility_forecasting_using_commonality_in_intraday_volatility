@@ -9,7 +9,8 @@ data_centre/databases/
 model/*.csv
 test.py
 test2.py
-main.sh
+.png
+.csv
 .idea/
 .idea
 __pycache__

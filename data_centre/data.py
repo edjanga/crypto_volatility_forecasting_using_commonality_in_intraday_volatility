@@ -35,7 +35,7 @@ class Reader:
         returns_df.ffill(inplace=True)
         return returns_df
 
-    def rv_read(self, cutoff_low: float = .01, cutoff_high: float = .01, raw: bool=False,
+    def rv_read(self, cutoff_low: float = .01, cutoff_high: float = .01, raw: bool = False,
                 symbol: typing.Union[typing.List[str], str] = None, variance: bool = False)\
             -> pd.DataFrame:
         rv_df = \
@@ -71,6 +71,8 @@ class Reader:
         csr_df = csr_df.resample('5T').last()
         csr_df = pd.DataFrame(data=Reader._min_max_scaler.fit_transform(X=csr_df),
                               index=csr_df.index, columns=csr_df.columns)
+        csr_df.replace(0, np.nan, inplace=True)
+        csr_df.ffill(inplace=True)
         return csr_df
 
     def correlation_read(self, cutoff_low: float = .01, cutoff_high: float = .01, raw: bool=False) -> pd.DataFrame:

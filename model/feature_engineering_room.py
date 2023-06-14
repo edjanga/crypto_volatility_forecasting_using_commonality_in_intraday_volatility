@@ -91,22 +91,15 @@ class FeatureCovariance(FeatureBuilderBase):
     def __init__(self):
         super().__init__('covariance_ar')
 
-    def builder(self, F: typing.Union[typing.List[str], str],
-                df: pd.DataFrame) -> pd.DataFrame:
+    def builder(self, df: pd.DataFrame, lag: str='5T') -> pd.DataFrame:
 
-        if isinstance(F, str):
-            F = [F]
-        window = pd.to_timedelta('30D') // pd.to_timedelta('5T') if \
-            F[-1] == '1M' else max(4, pd.to_timedelta(F[-1]) // pd.to_timedelta('5T'))
-        covariance = \
-            df.rolling(window=window).cov().dropna().droplevel(axis=0, level=1).mean(axis=1)
+        window = 4
+        covariance = df.rolling(window=window).cov().dropna().droplevel(axis=0, level=1).mean(axis=1)
         covariance = covariance.groupby(by=covariance.index).mean()
         covariance.name = 'COV'
         covariance = pd.DataFrame(covariance)
-        for _, lookback in enumerate(F):
-            if self._5min_buckets_lookback_window_dd[lookback] <= 288:
-                offset = self._lookback_window_dd[lookback]
-                covariance = covariance.join(covariance.shift(offset), how='left', rsuffix=f'_{lookback}')
+        offset = self._lookback_window_dd[lag]
+        covariance = covariance.join(covariance.shift(offset), how='left', rsuffix=f'_30T')
         covariance.ffill(inplace=True)
         covariance.dropna(inplace=True)
         return covariance
