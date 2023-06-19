@@ -18,7 +18,7 @@ from hottbox.pdtools import pd_to_tensor
 from itertools import product
 from scipy.stats import t
 import sqlite3
-from model.feature_engineering_room import FeatureCovariance, FeatureRiskMetricsEstimator, FeatureHAR,\
+from model.feature_engineering_room import FeatureAR, FeatureRiskMetricsEstimator, FeatureHAR,\
     FeatureHARDummy, FeatureHARCDR, FeatureHARCSR, FeatureHARUniversal, FeatureHARUniversalPuzzle, rv_1w_correction
 import argparse
 import matplotlib.pyplot as plt
@@ -31,7 +31,7 @@ qlike_score = lambda x: ((x.iloc[:, 0].div(x.iloc[:, -1]))-np.log(x.iloc[:, 0].d
 
 class ModelBuilder:
 
-    _factory_model_type_dd = {'covariance_ar': FeatureCovariance(),
+    _factory_model_type_dd = {'ar': FeatureAR(),
                               'risk_metrics': FeatureRiskMetricsEstimator(),
                               'har': FeatureHAR(),
                               'har_dummy_markets': FeatureHARDummy(),
@@ -50,7 +50,7 @@ class ModelBuilder:
                                   None: {'transformation': lambda x: x, 'inverse': lambda x: x},
                                   'shift': {'transformation': lambda x: x+1,
                                              'inverse': lambda x: x-1}}
-    models = [None, 'covariance_ar', 'har', 'har_dummy_markets', 'har_cdr', 'har_csr', 'har_universal']
+    models = [None, 'ar', 'risk_metrics', 'har', 'har_dummy_markets', 'har_cdr', 'har_csr', 'har_universal']
     models_rolling_metrics_dd = {model: dict([('qlike', {}), ('r2', {}), ('mse', {}),
                                               ('tstats', {}), ('pvalues', {}), ('coefficient', {})])
                                  for _, model in enumerate(models) if model}
@@ -61,8 +61,11 @@ class ModelBuilder:
     coins_copy = coins[::]
     _ensemble_model_store_dd = dict([(model, dict()) for model in models])
     global _pca_components_symbols_dd
-    _pca_components_symbols_dd = dict([coin, list()] for coin in coins_copy)
-    _pca_components_models_dd = dict([model, _pca_components_symbols_dd] for model in models if model)
+    _pca_components_symbols_dd = dict([(coin, list()) for coin in coins_copy])
+    pca_components_models_dd = dict([(model, _pca_components_symbols_dd) for model in models
+                                     if model not in [None, 'ar', 'har_universal', 'risk_metrics']])
+    pca_components_components_dd = dict([(model, dict([(coin, None) for coin in coins_copy])) for model in models if
+                                         model not in [None, 'ar', 'har_universal', 'risk_metrics']])
     global symbol_networks_dd
     symbol_networks_dd = dict([(symbol, None) for _, symbol in enumerate(coins_copy)])
     models_networks_dd = \
@@ -87,6 +90,7 @@ class ModelBuilder:
     db_connect_y = sqlite3.connect(database=os.path.abspath('./data_centre/databases/y.db'))
     db_connect_correlation = sqlite3.connect(database=os.path.abspath('./data_centre/databases/correlation.db'))
     db_connect_outliers = sqlite3.connect(database=os.path.abspath('./data_centre/databases/outliers.db'))
+    db_connect_pca = sqlite3.connect(database=os.path.abspath('./data_centre/databases/pca.db'))
     reader_obj = Reader(file='./data_centre/tmp/aggregate2022')
 
     def __init__(self, h: str, F: typing.List[str], L: str, Q: str, model_type: str=None, s=None, b: str='5T'):
@@ -247,14 +251,14 @@ class ModelBuilder:
             feature_obj = ModelBuilder._factory_model_type_dd[self._model_type]
         else:
             feature_obj = ModelBuilder._factory_model_type_dd[self._model_type][cross]
-        if self._model_type in ['har', 'har_dummy_markets', 'risk_metrics']:
-            data = feature_obj.builder(symbol=symbol, df=kwargs['df'], F=self._F)
+        if self._model_type in ['har', 'har_dummy_markets', 'ar']:
+            data = feature_obj.builder(symbol=symbol, F=self._F, df=kwargs['df'])
         elif self._model_type in ['har_csr', 'har_cdr']:
             data = feature_obj.builder(symbol=symbol, df=kwargs['df'], F=self._F, df2=kwargs['df2'])
         elif self._model_type in ['har_universal']:
             data = feature_obj.builder(df=kwargs['df'], F=self._F)
-        elif self._model_type in ['covariance_ar']:
-            data = feature_obj.builder(df=kwargs['df'])
+        elif self._model_type in ['risk_metrics']:
+            data = feature_obj.builder(symbol=symbol, df=kwargs['df'], F=self._F)
         data = \
             pd.DataFrame(
                 data=np.vectorize(
@@ -267,8 +271,6 @@ class ModelBuilder:
 
     def clean_exog(self, data: pd.DataFrame, symbol: typing.Union[typing.Tuple[str], str]) -> pd.DataFrame:
         if self._model_type != 'har_universal':
-            # if isinstance(symbol, str):
-            #     symbol = (symbol, symbol)
             exog_rv = data.filter(regex=f'{symbol}')
             exog_rest = data.loc[:, ~data.columns.isin(exog_rv.columns.tolist())]
             exog_rv.replace(0, np.nan, inplace=True)
@@ -276,8 +278,9 @@ class ModelBuilder:
             exog = pd.concat([exog_rv, exog_rest], axis=1)
         return exog
 
-    def rolling_metrics(self, cross: bool, symbol: typing.Union[typing.Tuple[str], str], regression_type: str='linear',
-                        transformation: str=None, **kwargs) -> typing.Tuple[pd.Series]:
+    def rolling_metrics(self, cross: bool, symbol: typing.Union[typing.Tuple[str], str],
+                        regression_type: str = 'linear',
+                        transformation: str = None, **kwargs) -> typing.Tuple[pd.Series]:
         if (not cross) & (regression_type == 'ensemble'):
             raise TypeError('Ensemble and not cross are not compatible. Change regression type.')
         if self._model_type not in ModelBuilder.models:
@@ -290,11 +293,8 @@ class ModelBuilder:
             if cross & (self._model_type != 'har_universal'):
                 endog = ModelBuilder.reader_obj.rv_read(symbol=symbol)
             else:
-                if self._model_type == 'covariance_ar':
-                    endog = exog.pop('COV')
-                else:
-                    exog = self.clean_exog(exog, symbol) if self._model_type != 'har_universal' else exog
-                    endog = exog.pop(symbol) if self._model_type != 'har_universal' else exog.pop('RV')
+                exog = self.clean_exog(exog, symbol) if self._model_type != 'har_universal' else exog
+                endog = exog.pop(symbol) if self._model_type != 'har_universal' else exog.pop('RV')
             endog.replace(0, np.nan, inplace=True)
             endog.ffill(inplace=True)
             if (transformation == 'log') & ((exog < 0).sum().sum() > 0):
@@ -310,33 +310,6 @@ class ModelBuilder:
                     ModelBuilder._factory_transformation_dd[transformation]['transformation'])
                 (endog.values), index=endog.index, columns=endog.columns)
                 endog = endog - original_min if ((transformation == 'log') & negative_value_in_exog & cross) else endog
-            #
-            # if not cross:
-            #     data = self.getting_data(symbol, transformation, **kwargs)
-            #     endog = data.pop(symbol) if self._model_type != 'har_universal' else data.pop('RV')
-            #     endog.replace(0, np.nan, inplace=True)
-            #     endog.ffill(inplace=True)
-            #     exog = data
-            #     exog = self.clean_exog(exog, symbol) if self._model_type != 'har_universal' else exog
-            # else:
-            #     if self._model_type != 'har_universal':
-            #         exog = ModelBuilder.models_networks_dd[self._model_type][symbol]
-            #         endog = ModelBuilder.reader_obj.rv_read(symbol=symbol)
-            #     else:
-            #         pdb.set_trace()
-            #     original_min = abs(exog.min().min())
-            #     negative_value_in_exog = (exog < 0).sum().sum() > 0
-            #     if (transformation == 'log') & ((exog < 0).sum().sum() > 0):
-            #         exog = exog + original_min
-            #         endog = endog + original_min
-            #     exog = pd.DataFrame(data=np.vectorize(
-            #         ModelBuilder._factory_transformation_dd[transformation]['transformation'])(exog.values),
-            #                         index=exog.index, columns=exog.columns)
-            #     exog = exog - original_min if ((transformation == 'log') & negative_value_in_exog & cross) else exog
-            #     endog = pd.DataFrame(data=np.vectorize(
-            #         ModelBuilder._factory_transformation_dd[transformation]['transformation'])
-            #     (endog.values), index=endog.index, columns=endog.columns)
-            #     endog = endog - original_min if ((transformation == 'log') & negative_value_in_exog & cross) else endog
         feature_obj = ModelBuilder._factory_model_type_dd[self._model_type] if self._model_type != 'har_universal' \
             else ModelBuilder._factory_model_type_dd[self._model_type][cross]
         regression = ModelBuilder._factory_regression_dd[regression_type]
@@ -346,12 +319,6 @@ class ModelBuilder:
         columns_name = \
             ['const'] + ['_'.join(('RV', F)) for _, F in enumerate(self._F)] if \
                 ((self._model_type == 'har_universal') & (not cross)) else ['const'] + exog.columns.tolist()
-        # if (self._model_type != 'har_universal') & (not cross):
-        #     columns_name = \
-        #         ['const'] + exog.columns.tolist() if self._model_type != \
-        #         'har_universal' else ['const'] + ['_'.join(('RV', F)) for _, F in enumerate(self._F)]
-        # elif (self._model_type == 'har_universal') & cross:
-        #     columns
         coefficient = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_name)
         # tstats = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_name)
         # pvalues = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_name)
@@ -421,7 +388,7 @@ class ModelBuilder:
                 else:
                     if self._model_type != 'har_universal':
                         ModelBuilder.outliers_dd[self._L].append(new_N / old_N)
-                if cross and regression_type != 'linear':
+                if cross & (regression_type != 'linear') & (self._model_type != 'har_universal'):
                     """
                         Retrain XGBoost in the first iteration or once per month (as time consuming to train everyday)
                         only for BTCUSDT. For other tokens, use model trained for BTCUSDT. 
@@ -443,13 +410,10 @@ class ModelBuilder:
                         rres = ModelBuilder._ensemble_model_store_dd[self._model_type][date]
                 else:
                     rres = regression.fit(X_train, y_train)
-                if cross and self._model_type != 'har_universal':
+                if cross & (self._model_type != 'har_universal') & (regression_type != 'linear'):
                     pass
                 else:
-                    try:
-                        coefficient.loc[date, :] = np.concatenate((np.array([rres.intercept_]), rres.coef_))
-                    except ValueError:
-                        pdb.set_trace()
+                    coefficient.loc[date, :] = np.concatenate((np.array([rres.intercept_]), rres.coef_))
                 """Test set"""
                 test_date = (date + ModelBuilder.start_dd['1D']).date()
                 X_test, y_test = exog.loc[test_date.strftime('%Y-%m-%d'), :], endog.loc[test_date.strftime('%Y-%m-%d')]
@@ -461,8 +425,8 @@ class ModelBuilder:
                 y_test.replace(-np.inf, np.nan, inplace=True)
                 X_test.ffill(inplace=True)
                 y_test.ffill(inplace=True)
-                y_hat = rres.predict(X_test.drop('const', axis=1)) if regression_type == 'linear'\
-                    else rres.predict(X_test)
+                y_hat = \
+                    rres.predict(X_test.drop('const', axis=1)) if regression_type == 'linear' else rres.predict(X_test)
                 y_hat = \
                     pd.Series(data=ModelBuilder._factory_transformation_dd[transformation]['inverse'](y_hat),
                               index=y_test.index)
@@ -516,7 +480,7 @@ class ModelBuilder:
         # tstats.dropna(inplace=True)
         # pvalues.ffill(inplace=True)
         # pvalues.dropna(inplace=True)
-        coefficient = coefficient.loc[coefficient.index[::pd.to_timedelta(self._h)//pd.to_timedelta(self._b)], :]
+        coefficient = coefficient.loc[coefficient.index[::pd.to_timedelta('1D')//pd.to_timedelta(self._b)], :]
         coefficient.columns = \
             coefficient.columns.str.replace('_'.join((symbol, '')), '') \
                 if self._model_type != 'har_universal' else coefficient.columns.str.replace('_'.join(('RV', '')), '')
@@ -563,21 +527,25 @@ class ModelBuilder:
             elif self._model_type in ['har_cdr', 'har_csr']:
                 exog = pd.concat([feature_obj.builder(df=rv, symbol=symbol, df2=kwargs['df2'],
                                                       F=self._F) for symbol in rv.columns], axis=1)
-            filter_dd = {'har': f'{symbol}', 'har_dummy_markets': f'{symbol}|session',
-                         'har_cdr': f'{symbol}|{"_".join((symbol, "CDR"))}', 'har_csr': f'{symbol}'}
-            endog = exog.pop(symbol)
-            exog = \
-                pd.concat([pd.Series(data=auxiliary_regression.fit(exog.filter(regex=filter_dd[self._model_type]),
-                endog).predict(exog.filter(regex=filter_dd[self._model_type])),
-                                     index=exog.index, name=symbol) for
-                symbol in rv.columns], axis=1)
-        else:
-            pass
+            filter_dd = {'har': lambda x: f'{x}_', 'har_dummy_markets': lambda x: f'{x}_|session',
+                         'har_cdr': lambda x: f'{x}_|{x}_CDR', 'har_csr': lambda x: f'{x}_|{x}_CSR_'}
+            try:
+                endog = exog.pop(symbol)
+            except UnboundLocalError:
+                pdb.set_trace()
+            auxiliary_tmp_dd = dict()
+            for coin in ModelBuilder.coins:
+                expression = filter_dd[self._model_type](coin)
+                auxiliary_X_train = exog.filter(regex=expression)
+                auxiliary_X_train = auxiliary_X_train.loc[:, ~auxiliary_X_train.columns.duplicated('first')]
+                auxiliary_tmp_dd[coin] = \
+                    auxiliary_regression.fit(auxiliary_X_train, endog).predict(auxiliary_X_train)
+            exog = pd.DataFrame(auxiliary_tmp_dd, index=endog.index)
         exog_pca = ModelBuilder._pca_obj.fit_transform(exog)
         variance_ratio_percentage = np.cumsum(ModelBuilder._pca_obj.explained_variance_ratio_)
         variance_ratio_percentage = variance_ratio_percentage > variance_explained
         n_components = np.where(variance_ratio_percentage == True)[0][0]+1
-        ModelBuilder._pca_components_models_dd[self._model_type][symbol].append(n_components)
+        ModelBuilder.pca_components_models_dd[self._model_type][symbol].append(n_components)
         exog = pd.DataFrame(index=exog.index, columns=['_'.join(('PC', str(n+1))) for n in range(0, n_components)],
                             data=exog_pca[:, :n_components])
         ModelBuilder.models_networks_dd[self._model_type][symbol] = exog
@@ -592,7 +560,7 @@ class ModelBuilder:
         if cross:
             if self._model_type != 'har_universal':
                 for symbol in ModelBuilder.coins:
-                    if self._model_type in ['har', 'har_dummy_markets']:
+                    if self._model_type in ['har', 'har_dummy_markets', 'ar']:
                         self.fill_model_network(symbol=symbol, transformation=transformation,
                                                 variance_explained=kwargs['variance_explained'])
                     elif self._model_type in ['har_cdr', 'har_csr']:
@@ -601,7 +569,7 @@ class ModelBuilder:
         if self._model_type != 'har_universal':
             coin_ls = set(self.coins).intersection(set(kwargs['df'].columns))
             coin_ls = list(coin_ls)
-            coin_ls = ['COV'] if self._model_type == 'covariance_ar' else coin_ls
+            coin_ls = ['COV'] if self._model_type == 'ar' else coin_ls
             r2_dd = dict([(pair, pd.DataFrame()) for _, pair in enumerate(coin_ls)])
             mse_dd = dict([(pair, pd.DataFrame()) for _, pair in enumerate(coin_ls)])
             qlike_dd = dict([(pair, pd.DataFrame()) for _, pair in enumerate(coin_ls)])
@@ -683,8 +651,9 @@ class ModelBuilder:
             #     pd.DataFrame({symbol: tstats.mean() for symbol, tstats in tstats_dd.items()})
             # ModelBuilder.models_rolling_metrics_dd[self._model_type]['pvalues'] = \
             #     pd.DataFrame({symbol: pvalues.mean() for symbol, pvalues in pvalues_dd.items()})
-            ModelBuilder.models_rolling_metrics_dd[self._model_type]['coefficient'] = \
-                pd.DataFrame({symbol: coeff.mean() for symbol, coeff in coefficient_dd.items()})
+            if not cross:
+                ModelBuilder.models_rolling_metrics_dd[self._model_type]['coefficient'] = \
+                    pd.DataFrame({symbol: coeff.mean() for symbol, coeff in coefficient_dd.items()})
 
     @staticmethod
     def remove_redundant_key(dd: dict) -> None:

@@ -717,9 +717,9 @@ class PlotResults:
         """
         Query data
         """
-        query = f'SELECT * FROM coefficient_{L}_{cross}_{transformation}'
+        query = f'SELECT * FROM coefficient_{L}_{cross}_{transformation}_{regression_type}'
         coefficient = pd.read_sql(con=PlotResults.db_connect_coefficient, sql=query, index_col='index') if not test \
-            else pd.read_csv(f'./model/coefficient_{L}_{cross}_{transformation}.csv')
+            else pd.read_csv(f'./coefficient_{L}_{cross}_{transformation}_{regression_type}.csv')
         coefficient = coefficient.query(f'model not in {models_excl}') if models_excl else coefficient
         """
         Plot bar plot
@@ -741,34 +741,35 @@ class PlotResults:
         """
         Query data
         """
-        query = f'SELECT * FROM r2_{L}_{cross}_{transformation}'
+        query = f'SELECT * FROM r2_{L}_{cross}_{transformation}_{regression_type}'
         r2 = pd.read_sql(con=PlotResults.db_connect_r2, sql=query, index_col='timestamp') if not test \
-            else pd.read_csv(f'./model/r2_{L}_{cross}_{transformation}.csv',
+            else pd.read_csv(f'./r2_{L}_{cross}_{transformation}_{regression_type}.csv',
                              index_col='timestamp', date_parser=lambda x: pd.to_datetime(x, utc=True))
         r2 = r2.query(f'model not in {models_excl}') if models_excl else r2
-        query = f'SELECT * FROM mse_{L}_{cross}_{transformation}'
+        query = f'SELECT * FROM mse_{L}_{cross}_{transformation}_{regression_type}'
         mse = pd.read_sql(con=PlotResults.db_connect_mse, sql=query, index_col='timestamp') if not test \
-            else pd.read_csv(f'./model/mse_{L}_{cross}_{transformation}.csv',
+            else pd.read_csv(f'./mse_{L}_{cross}_{transformation}_{regression_type}.csv',
                              index_col='timestamp', date_parser=lambda x: pd.to_datetime(x, utc=True))
         mse = mse.query(f'model not in {models_excl}') if models_excl else mse
-        query = f'SELECT * FROM qlike_{L}_{cross}_{transformation}'
+        query = f'SELECT * FROM qlike_{L}_{cross}_{transformation}_{regression_type}'
         qlike = pd.read_sql(con=PlotResults.db_connect_qlike, sql=query, index_col='timestamp') if not test \
-            else pd.read_csv(f'./model/qlike_{L}_{cross}_{transformation}.csv',
+            else pd.read_csv(f'./qlike_{L}_{cross}_{transformation}_{regression_type}.csv',
                              index_col='timestamp', date_parser = lambda x: pd.to_datetime(x, utc=True))
         qlike = qlike.query(f'model not in {models_excl}') if models_excl else qlike
         models_ls = r2.model.unique().tolist()
-        markers_ls = ['orange', 'green', 'blue', 'purple', 'red']
+        markers_ls = ['orange', 'green', 'blue', 'purple', 'red', ]
         markers_dd = {model: markers_ls[i-1] for i, model in enumerate(models_ls) if model}
         col_grid = 1
         row_grid = 3
         fig = make_subplots(rows=row_grid, cols=col_grid,
                             row_titles=['average R2', 'average MSE', 'average QLIKE'], shared_xaxes=True)
         fig_title = f'Rolling metrics {L} {cross} {transformation}'
+        idx_common = r2.groupby(by='model', group_keys=True).apply(lambda x: x.index)['har']
         for i, model in enumerate(models_ls):
             if model:
-                tmp_df = r2.query(f'model == "{model}"')
-                tmp2_df = mse.query(f'model == "{model}"')
-                tmp3_df = qlike.query(f'model == "{model}"')
+                tmp_df = r2.query(f'model == "{model}"').loc[idx_common, :]
+                tmp2_df = mse.query(f'model == "{model}"').loc[idx_common, :]
+                tmp3_df = qlike.query(f'model == "{model}"').loc[idx_common, :]
                 fig.add_trace(go.Scatter(x=tmp_df.index, y=tmp_df['values'], marker_color=markers_dd[model],
                                          showlegend=True, name=model), row=1, col=1)
                 fig.add_trace(go.Scatter(x=tmp2_df.index, y=tmp2_df['values'], marker_color=markers_dd[model],
@@ -777,6 +778,8 @@ class PlotResults:
                                          name=model, marker_color=markers_dd[model]), row=3, col=1)
                 fig.update_xaxes(tickangle=45, tickformat='%m-%Y')
                 fig.update_layout(height=1500, width=1200, title={'text': fig_title})
+        fig.add_trace(go.Scatter(x=tmp3_df.index, y=pd.Series(data=0, index=tmp3_df.index),
+                                 line=dict(color='black', width=1, dash='dash'), showlegend=False),  row=1, col=1)
         if save:
             fig.write_image(os.path.abspath(
                 f'./plots/rolling_metrics_{L}_{cross}_{transformation}_{regression_type}.png'))
@@ -792,19 +795,19 @@ class PlotResults:
         """
         Query data
         """
-        query = f'SELECT * FROM r2_{L}_{cross}_{transformation};'
+        query = f'SELECT * FROM r2_{L}_{cross}_{transformation}_{regression_type};'
         r2 = pd.read_sql(con=PlotResults.db_connect_r2, sql=query, index_col='timestamp') if not test \
-            else pd.read_csv(f'./model/r2_{L}_{cross}_{transformation}.csv',
+            else pd.read_csv(f'./r2_{L}_{cross}_{transformation}_{regression_type}.csv',
                              index_col='timestamp', date_parser = lambda x: pd.to_datetime(x, utc=True))
         r2 = r2.query(f'model not in {models_excl}') if models_excl else r2
-        query = f'SELECT * FROM mse_{L}_{cross}_{transformation};'
+        query = f'SELECT * FROM mse_{L}_{cross}_{transformation}_{regression_type};'
         mse = pd.read_sql(con=PlotResults.db_connect_mse, sql=query, index_col='timestamp') if not test \
-            else pd.read_csv(f'./model/mse_{L}_{cross}_{transformation}.csv',
+            else pd.read_csv(f'./mse_{L}_{cross}_{transformation}_{regression_type}.csv',
                              index_col='timestamp', date_parser = lambda x: pd.to_datetime(x, utc=True))
         mse = mse.query(f'model not in {models_excl}') if models_excl else mse
-        query = f'SELECT * FROM qlike_{L}_{cross}_{transformation};'
+        query = f'SELECT * FROM qlike_{L}_{cross}_{transformation}_{regression_type};'
         qlike = pd.read_sql(con=PlotResults.db_connect_qlike, sql=query, index_col='timestamp') if not test \
-            else pd.read_csv(f'./model/qlike_{L}_{cross}_{transformation}.csv',
+            else pd.read_csv(f'./qlike_{L}_{cross}_{transformation}_{regression_type}.csv',
                              index_col='timestamp', date_parser = lambda x: pd.to_datetime(x, utc=True))
         qlike = qlike.query(f'model not in {models_excl}') if models_excl else qlike
         stats = \
@@ -812,15 +815,16 @@ class PlotResults:
                 else [lambda x: x.quantile(.5), lambda x: x.quantile(.25), lambda x: x.quantile(.75)]
         stats_columns = ['mean', 'median', '25th_percentile', '75th_percentile'] if mean else \
             ['median', '25th_percentile', '75th_percentile']
-        r2 = r2.groupby(by='model').agg(stats)
+        idx_common = r2.groupby(by='model', group_keys=True).apply(lambda x: x.index)['har']
+        r2 = r2.loc[r2.index.isin(idx_common)].groupby(by='model').agg(stats)
         r2.columns = stats_columns
         r2 = pd.melt(r2, var_name='stats', value_name='value', ignore_index=False).reset_index()
         r2 = r2.assign(metric='r2')
-        mse = mse.groupby(by='model').agg(stats)
+        mse = mse.loc[mse.index.isin(idx_common)].groupby(by='model').agg(stats)
         mse.columns = stats_columns
         mse = pd.melt(mse, var_name='stats', value_name='value', ignore_index=False).reset_index()
         mse = mse.assign(metric='mse')
-        qlike = qlike.groupby(by='model').agg(stats)
+        qlike = qlike.loc[qlike.index.isin(idx_common)].groupby(by='model').agg(stats)
         qlike.columns = stats_columns
         qlike = pd.melt(qlike, var_name='stats', value_name='value', ignore_index=False).reset_index()
         qlike = qlike.assign(metric='qlike')
@@ -852,27 +856,27 @@ class PlotResults:
         fig.update_layout(height=900, width=1200, title={'text': fig_title}, barmode='group')
         mean_dd = {True:'mean', False: 'witout_mean'}
         if save:
-            fig.write_image(os.path.abspath(f'./rolling_metrics_bar_plot_{L}_'
-                                            f'{cross}_{mean_dd[mean]}_{transformation}_'
-                                            f'{regression_type}.png'))
+            fig.write_image(os.path.abspath(f'./plots/rolling_metrics_bar_plot_{L}_{cross}_{transformation}.png'))
         else:
             fig.show()
 
     @staticmethod
     def scatterplot(L: str, cross: bool, save: bool, transformation: str,
                     models_excl: typing.Union[str, typing.List[str], None] = 'har_csr',
-                    shared_xaxes=True, test: bool=False, regression_type: str = 'linear'):
+                    shared_xaxes=False, test: bool=False, regression_type: str = 'linear'):
         """
         Query data
         """
         if isinstance(models_excl, str):
             models_excl = [models_excl]
-        query = f'SELECT \"y\",\"y_hat\",\"model\", \"timestamp\" FROM y_{L}_{cross}_{transformation}'
+        query = f'SELECT \"y\",\"y_hat\",\"model\", \"timestamp\" FROM y_{L}_{cross}_{transformation}_{regression_type}'
         y = pd.read_sql(con=PlotResults.db_connect_y, sql=query, index_col='timestamp') if not test \
-        else pd.read_csv(f'./model/y_{L}_{cross}_{transformation}.csv',
+        else pd.read_csv(f'./y_{L}_{cross}_{transformation}_{regression_type}.csv',
                          date_parser=lambda x: pd.to_datetime(x, utc=True),
                          index_col='timestamp', usecols=['y', 'y_hat', 'model', 'timestamp'])
         y = y.query(f'model not in {models_excl}') if models_excl else y
+        idx_common = y.groupby(by='model', group_keys=True).apply(lambda x: x.index)['har']
+        y = y[y.index.isin(idx_common)]
         y.index = pd.to_datetime(y.index)
         models_ls = y.model.unique().tolist()
         col_grid = 1
@@ -905,12 +909,14 @@ class PlotResults:
         Query data
         """
         query = f'SELECT \"y\",\"y_hat\",\"model\", \"timestamp\"' \
-                f' FROM y_{L}_{cross}_{transformation}'
+                f' FROM y_{L}_{cross}_{transformation}_{regression_type}'
         y = pd.read_sql(con=PlotResults.db_connect_y, sql=query, index_col='timestamp') if not test \
-            else pd.read_csv(f'./model/y_{L}_{cross}_{transformation}.csv',
+            else pd.read_csv(f'./y_{L}_{cross}_{transformation}_{regression_type}.csv',
                              date_parser=lambda x: pd.to_datetime(x, utc=True),
                              index_col='timestamp', usecols=['y', 'y_hat', 'model', 'timestamp'])
         y = y.query(f'model not in {models_excl}') if models_excl else y
+        idx_common = y.groupby(by='model', group_keys=True).apply(lambda x: x.index)['har']
+        y = y[y.index.isin(idx_common)]
         y.index = pd.to_datetime(y.index)
         models_ls = y.model.unique().tolist()
         col_grid = 1
@@ -931,7 +937,7 @@ class PlotResults:
         if save:
             fig.write_image(
             os.path.abspath(
-            f'./plots/distributions_y_vs_y_hat{L}_{cross}_{transformation}_{regression_type}.png')
+            f'./plots/distributions_y_vs_y_hat_{L}_{cross}_{transformation}_{regression_type}.png')
             )
         else:
             fig.show()
@@ -943,7 +949,7 @@ class PlotResults:
         """
         query = f'SELECT * FROM outliers;'
         outliers = pd.read_sql(con=PlotResults.db_connect_outliers, sql=query) if not test \
-            else pd.read_csv(f'./model/outliers.csv')
+            else pd.read_csv(f'./outliers.csv')
         outliers.dropna(inplace=True)
         fig_title = 'Rolling outliers: Distribution'
         fig = px.histogram(outliers, x='values', color='L')

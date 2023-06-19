@@ -55,7 +55,6 @@ class Market:
 
 
 class FeatureBuilderBase:
-    #pd.DateOffset(hours=1))
 
     """Lookback windows smaller than 1D are dynamic while the rest is static"""
     _lookback_window_dd = dict([('5T', pd.to_timedelta('5T')//pd.to_timedelta('5T')),
@@ -86,50 +85,42 @@ class FeatureBuilderBase:
         pass
 
 
-class FeatureCovariance(FeatureBuilderBase):
+class FeatureAR(FeatureBuilderBase):
 
     def __init__(self):
-        super().__init__('covariance_ar')
+        super().__init__('ar')
 
-    def builder(self, df: pd.DataFrame, lag: str='5T') -> pd.DataFrame:
-
-        window = 4
-        covariance = df.rolling(window=window).cov().dropna().droplevel(axis=0, level=1).mean(axis=1)
-        covariance = covariance.groupby(by=covariance.index).mean()
-        covariance.name = 'COV'
-        covariance = pd.DataFrame(covariance)
-        offset = self._lookback_window_dd[lag]
-        covariance = covariance.join(covariance.shift(offset), how='left', rsuffix=f'_30T')
-        covariance.ffill(inplace=True)
-        covariance.dropna(inplace=True)
-        return covariance
+    def builder(self, df: pd.DataFrame, symbol: str, F: typing.List[str] = None) -> pd.DataFrame:
+        if isinstance(symbol, str):
+            symbol = (symbol, symbol)
+        list_symbol = list(dict.fromkeys(symbol).keys())
+        symbol_df = df[list_symbol].copy()
+        symbol_df[f'{list_symbol[-1]}_30T'] = symbol_df[f'{list_symbol[-1]}'].shift(FeatureAR._lookback_window_dd[F[0]])
+        return symbol_df.dropna()
 
 
 class FeatureRiskMetricsEstimator(FeatureBuilderBase):
 
-    data_obj = Reader(file='../data_centre/tmp/aggregate2022')
-    factor = .94 #lambda in formala
+    data_obj = Reader(file='./data_centre/tmp/aggregate2022')
+    factor = .94 #lambda in formula
 
     def __init__(self):
         super().__init__('risk_metrics')
 
     def builder(self, F: typing.Union[typing.List[str], str],
                 df: pd.DataFrame, symbol: typing.Union[str, typing.List[str]]) -> pd.DataFrame:
-
         if isinstance(F, str):
             F = [F]
         if isinstance(symbol, str):
             symbol = (symbol, symbol)
         list_symbol = list(dict.fromkeys(symbol).keys())
-        window = pd.to_timedelta('30D') // pd.to_timedelta('5T') if \
-            F[-1] == '1M' else max(4, pd.to_timedelta(F[-1]) // pd.to_timedelta('5T'))
-        symbol_returns_df = \
-            df[list(set([symbol[-1]]))].copy().rename(columns={symbol[-1]: '_'.join((symbol[-1], 'RET', F[-1]))})**2
-        symbol_returns_df = symbol_returns_df.shift(pd.to_timedelta(F[-1])//pd.to_timedelta('5T'))
+        symbol_returns_df = df[list_symbol].copy().rename(columns={symbol[-1]: '_'.join((symbol[-1], 'RET', F[0]))})**2
+        symbol_returns_df = symbol_returns_df.shift(FeatureRiskMetricsEstimator._lookback_window_dd[F[0]])
+        symbol_returns_df = symbol_returns_df.sub(symbol_returns_df.mean()[0])
         symbol_rv_df = FeatureRiskMetricsEstimator.data_obj.rv_read(raw=False, symbol=list_symbol)
-        symbol_rv_df = symbol_rv_df[list_symbol]
-        symbol_rv_df[f'{"_".join((symbol[-1], F[-1]))}'] = \
-            symbol_rv_df[[symbol[-1]]].shift(pd.to_timedelta(F[-1])//pd.to_timedelta('5T'))
+        symbol_rv_df = symbol_rv_df[list_symbol].copy()
+        symbol_rv_df[f'{"_".join((symbol[-1], F[0]))}'] = \
+            symbol_rv_df[[symbol[-1]]].shift(FeatureRiskMetricsEstimator._lookback_window_dd[F[0]])
         symbol_df = pd.concat([symbol_rv_df, symbol_returns_df], axis=1).dropna()
         return symbol_df
 

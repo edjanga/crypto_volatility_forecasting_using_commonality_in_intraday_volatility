@@ -36,7 +36,7 @@ class Reader:
         return returns_df
 
     def rv_read(self, cutoff_low: float = .01, cutoff_high: float = .01, raw: bool = False,
-                symbol: typing.Union[typing.List[str], str] = None, variance: bool = False)\
+                symbol: typing.Union[typing.List[str], str] = None, variance: bool = True)\
             -> pd.DataFrame:
         rv_df = \
             self.returns_read(cutoff_low=cutoff_low, cutoff_high=cutoff_high,
