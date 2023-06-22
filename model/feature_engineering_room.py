@@ -116,7 +116,7 @@ class FeatureRiskMetricsEstimator(FeatureBuilderBase):
         list_symbol = list(dict.fromkeys(symbol).keys())
         symbol_returns_df = df[list_symbol].copy().rename(columns={symbol[-1]: '_'.join((symbol[-1], 'RET', F[0]))})**2
         symbol_returns_df = symbol_returns_df.shift(FeatureRiskMetricsEstimator._lookback_window_dd[F[0]])
-        symbol_returns_df = symbol_returns_df.sub(symbol_returns_df.mean()[0])
+        symbol_returns_df = symbol_returns_df.sub(symbol_returns_df.mean()[0])**2
         symbol_rv_df = FeatureRiskMetricsEstimator.data_obj.rv_read(raw=False, symbol=list_symbol)
         symbol_rv_df = symbol_rv_df[list_symbol].copy()
         symbol_rv_df[f'{"_".join((symbol[-1], F[0]))}'] = \
@@ -236,9 +236,14 @@ class FeatureHARCDR(FeatureBuilderBase):
                 offset = self._lookback_window_dd[lookback]
                 symbol_rv_df = symbol_rv_df.join(symbol_rv_df[[symbol[-1]]].shift(offset), how='left',
                                                  rsuffix=f'_{lookback}')
+                symbol_cdr_df = symbol_cdr_df.join(symbol_cdr_df[[symbol[-1]]].shift(offset), how='left',
+                                                 rsuffix=f'_{lookback}')
             else:
                 symbol_rv_df = \
                     symbol_rv_df.join(symbol_rv_df[[symbol[-1]]].apply(self._lookback_window_dd[lookback]).shift(1),
+                                      how='left', rsuffix=f'_{lookback}')
+                symbol_cdr_df = \
+                    symbol_cdr_df.join(symbol_cdr_df[[symbol[-1]]].apply(self._lookback_window_dd[lookback]).shift(1),
                                       how='left', rsuffix=f'_{lookback}')
         symbol_rv_df.ffill(inplace=True)
         symbol_rv_df.dropna(inplace=True)

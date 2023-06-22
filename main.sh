@@ -4,15 +4,15 @@ source ./venv/bin/activate
 ###########################################
 ## Not cross
 ###########################################
-for l in {1W,1M}
-do
-  python3 ./generate_results.py --L=$l --models=ar
-  python3 ./generate_results.py --L=$l --models=risk_metrics
-  python3 ./generate_results.py --L=$l --models=har
-  python3 ./generate_results.py --L=$l --models=har_dummy_markets
-  python3 ./generate_results.py --L=$l --models=har_cdr
-  python3 ./generate_results.py --L=$l --models=har_universal
-done
+#for l in {1W,1M}
+#do
+#  python3 ./generate_results.py --L=$l --models=ar --transformation=log
+#  python3 ./generate_results.py --L=$l --models=risk_metrics --transformation=log
+#  python3 ./generate_results.py --L=$l --models=har --transformation=log
+#  python3 ./generate_results.py --L=$l --models=har_dummy_markets --transformation=log
+#  python3 ./generate_results.py --L=$l --models=har_cdr --transformation=log
+#  python3 ./generate_results.py --L=$l --models=har_universal --transformation=log
+#done
 ###########################################
 ## Cross
 ###########################################
@@ -29,7 +29,7 @@ done
 #done
 for l in {1W,1M}
 do
-  python3 ./save_plots.py --L=$l
-  #python3 ./save_plots.py --L=$l --test=True --cross=True
+  python3 ./save_plots.py --L=$l --save=False --transformation=log
+#  #python3 ./save_plots.py --L=$l --test=True --cross=True
 done
 deactivate

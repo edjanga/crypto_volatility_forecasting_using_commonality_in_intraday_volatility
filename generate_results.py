@@ -121,23 +121,18 @@ if __name__ == '__main__':
     if (not args.cross) | ((args.cross) & (model_builder_obj.models == 'har_universal')):
         if test:
             coefficient.to_csv(f'{"_".join(["coefficient"] + table_name_suffix_ls)}.csv',
-                               mode=
-                               to_csv_dd[
-                                   os.path.exists(
-                                       f'./model/{"_".join(["coefficient"] + table_name_suffix_ls)}.csv')],
-                               index=
-                               os.path.exists(f'./model/{"_".join(["coefficient"] + table_name_suffix_ls)}.csv'),
-                               header=
-                               os.path.exists(f'./model/{"_".join(["coefficient"] + table_name_suffix_ls)}.csv'))
+                               mode='a',
+                               header=not os.path.exists(f'{"_".join(["coefficient"] + table_name_suffix_ls)}.csv'),
+                               index=not os.path.exists(f'{"_".join(["coefficient"] + table_name_suffix_ls)}.csv'))
         else:
             coefficient.to_sql(con=model_builder_obj.db_connect_coefficient,
                                name=f'{"_".join(["coefficient"] + table_name_suffix_ls)}',
                                if_exists='append')
     if test:
         y.to_csv(f'{"_".join(["y"] + table_name_suffix_ls)}.csv',
-                 mode=to_csv_dd[os.path.exists(f'./model/{"_".join(["y"] + table_name_suffix_ls)}.csv')],
-                 index=os.path.exists(f'./model/{"_".join(["y"] + table_name_suffix_ls)}.csv'),
-                 header=os.path.exists(f'./model/{"_".join(["y"] + table_name_suffix_ls)}.csv'))
+                 mode='a',
+                 header=not os.path.exists(f'{"_".join(["y"] + table_name_suffix_ls)}.csv'),
+                 index=not os.path.exists(f'{"_".join(["y"] + table_name_suffix_ls)}.csv'))
     else:
         y.to_sql(con=model_builder_obj.db_connect_y,
                  name=f'{"_".join(["y"] + table_name_suffix_ls)}',

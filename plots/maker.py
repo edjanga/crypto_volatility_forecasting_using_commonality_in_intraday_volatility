@@ -704,6 +704,7 @@ class PlotResults:
     db_connect_correlation = sqlite3.connect(database=os.path.abspath('./data_centre/databases/correlation.db'))
     cross_dd = {True: 'cross', False: 'not_crossed'}
     save_dd = {True: False, False: True}
+    colors_ls = px.colors.qualitative.Plotly
 
     def __init__(self):
         pass
@@ -757,8 +758,7 @@ class PlotResults:
                              index_col='timestamp', date_parser = lambda x: pd.to_datetime(x, utc=True))
         qlike = qlike.query(f'model not in {models_excl}') if models_excl else qlike
         models_ls = r2.model.unique().tolist()
-        markers_ls = ['orange', 'green', 'blue', 'purple', 'red', ]
-        markers_dd = {model: markers_ls[i-1] for i, model in enumerate(models_ls) if model}
+        markers_dd = {model: PlotResults.colors_ls[i] for i, model in enumerate(models_ls) if model}
         col_grid = 1
         row_grid = 3
         fig = make_subplots(rows=row_grid, cols=col_grid,

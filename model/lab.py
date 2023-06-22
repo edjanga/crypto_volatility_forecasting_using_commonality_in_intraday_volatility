@@ -297,19 +297,31 @@ class ModelBuilder:
                 endog = exog.pop(symbol) if self._model_type != 'har_universal' else exog.pop('RV')
             endog.replace(0, np.nan, inplace=True)
             endog.ffill(inplace=True)
-            if (transformation == 'log') & ((exog < 0).sum().sum() > 0):
-                original_min = abs(exog.min().min())
-                negative_value_in_exog = (exog < 0).sum().sum() > 0
-                exog = exog + original_min
-                endog = endog + original_min
-                exog = pd.DataFrame(data=np.vectorize(
-                    ModelBuilder._factory_transformation_dd[transformation]['transformation'])(exog.values),
-                                    index=exog.index, columns=exog.columns)
-                exog = exog - original_min if ((transformation == 'log') & negative_value_in_exog & cross) else exog
-                endog = pd.DataFrame(data=np.vectorize(
-                    ModelBuilder._factory_transformation_dd[transformation]['transformation'])
-                (endog.values), index=endog.index, columns=endog.columns)
-                endog = endog - original_min if ((transformation == 'log') & negative_value_in_exog & cross) else endog
+            # if (transformation == 'log') & ((exog < 0).sum().sum() > 0):
+            #     """
+            #         Vertical shift
+            #     """
+            #     original_min = \
+            #         abs(exog.min().min())
+            #     negative_value_in_exog = (exog < 0).sum().sum() > 0
+            #     exog = exog + original_min
+            #     endog = endog + original_min
+            #     # Delete if weird results
+            #     exog = exog[exog[exog < 0].sum(axis=1) == 0]
+            #     endog = endog.loc[exog.index]
+            #     exog = \
+            #         pd.DataFrame(
+            #         data=np.vectorize(
+            #         ModelBuilder._factory_transformation_dd[transformation]['transformation'])(exog.values),
+            #             index=exog.index, columns=exog.columns)
+            #     pdb.set_trace()
+            #     exog = exog - original_min if ((transformation == 'log') & negative_value_in_exog & (not cross)) else \
+            #         exog
+            #     endog = pd.DataFrame(data=np.vectorize(
+            #         ModelBuilder._factory_transformation_dd[transformation]['transformation'])
+            #     (endog.values), index=endog.index, columns=[endog.name])
+            #     endog = endog - original_min if ((transformation == 'log') & negative_value_in_exog & (not cross)) \
+            #         else endog
         feature_obj = ModelBuilder._factory_model_type_dd[self._model_type] if self._model_type != 'har_universal' \
             else ModelBuilder._factory_model_type_dd[self._model_type][cross]
         regression = ModelBuilder._factory_regression_dd[regression_type]
@@ -319,6 +331,8 @@ class ModelBuilder:
         columns_name = \
             ['const'] + ['_'.join(('RV', F)) for _, F in enumerate(self._F)] if \
                 ((self._model_type == 'har_universal') & (not cross)) else ['const'] + exog.columns.tolist()
+        if (self._model_type == 'risk_metrics') & (not cross):
+            columns_name.remove('const')
         coefficient = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_name)
         # tstats = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_name)
         # pvalues = pd.DataFrame(data=np.nan, index=idx_ls, columns=columns_name)
@@ -331,124 +345,130 @@ class ModelBuilder:
         y = list()
         left_date = max((pd.to_timedelta(self._L)//pd.to_timedelta('1D')), 1) if self._L != '1M' else \
             (pd.to_timedelta('30D')//pd.to_timedelta('1D'))
-        if self._model_type != 'risk_metrics':
-            for date in coefficient_update[left_date:-1]:
-                start = \
-                    pd.to_datetime(date) - ModelBuilder.start_dd['1D'] if ModelBuilder.L_shift_dd[self._L] < 288 \
-                    else pd.to_datetime(date) - ModelBuilder.start_dd[self._L]
-                if self._model_type != 'har_universal':
-                    X_train, y_train = exog.loc[(exog.index >= start) & (exog.index < pd.to_datetime(date, utc=True))],\
-                    endog.loc[(endog.index >= start) & (endog.index < pd.to_datetime(date, utc=True))]
-                else:
-                    X_train, y_train = exog.loc[(exog.index.get_level_values(0) >= start) &
-                                            (exog.index.get_level_values(0) < pd.to_datetime(date, utc=True))],\
-                    endog.loc[(endog.index.get_level_values(0) >= start) &
-                              (endog.index.get_level_values(0) < pd.to_datetime(date, utc=True))]
-                X_train.dropna(inplace=True)
+        for date in coefficient_update[left_date:-1]:
+            start = \
+                pd.to_datetime(date) - ModelBuilder.start_dd['1D'] if ModelBuilder.L_shift_dd[self._L] < 288 \
+                else pd.to_datetime(date) - ModelBuilder.start_dd[self._L]
+            if self._model_type != 'har_universal':
+                X_train, y_train = exog.loc[(exog.index >= start) & (exog.index < pd.to_datetime(date, utc=True))],\
+                endog.loc[(endog.index >= start) & (endog.index < pd.to_datetime(date, utc=True))]
+            else:
+                X_train, y_train = exog.loc[(exog.index.get_level_values(0) >= start) &
+                                        (exog.index.get_level_values(0) < pd.to_datetime(date, utc=True))],\
+                endog.loc[(endog.index.get_level_values(0) >= start) &
+                          (endog.index.get_level_values(0) < pd.to_datetime(date, utc=True))]
+            X_train.dropna(inplace=True)
+            y_train.dropna(inplace=True)
+            X_train.replace(np.inf, np.nan, inplace=True)
+            X_train.replace(-np.inf, np.nan, inplace=True)
+            y_train.replace(np.inf, np.nan, inplace=True)
+            y_train.replace(-np.inf, np.nan, inplace=True)
+            X_train.ffill(inplace=True)
+            y_train.ffill(inplace=True)
+            if transformation == 'log':
+                """To be checked"""
+                y_train.drop(X_train.loc[X_train.isnull().sum(axis=1) > 0].index, inplace=True, axis=0)
+                X_train.drop(X_train.loc[X_train.isnull().sum(axis=1) > 0].index, inplace=True, axis=0)
+            if self._model_type != 'har_universal':
+                y_train.where(
+                    ((y_train <= y_train.quantile(.75) + 1.5 * (y_train.quantile(.75) - y_train.quantile(.25))) &
+                     (y_train >= y_train.quantile(.25) - 1.5 * (y_train.quantile(.75) - y_train.quantile(.25)))),
+                    inplace=True)
+            else:
+                y_train = \
+                    y_train.groupby(by=pd.Grouper(level=1), group_keys=True).apply(
+                        lambda x: x.where((x <= x.quantile(.75) + 1.5 * (x.quantile(.75) - x.quantile(.25))) &
+                                          (x >= x.quantile(.25) - 1.5 * (x.quantile(.75) - x.quantile(.25)))))
+                y_train = y_train.droplevel(axis=0, level=0)
+            old_N = X_train.shape[0]
+            new_N = y_train.shape[0]
+            y_train = y_train if isinstance(y_train, pd.Series) else y_train.iloc[:, 0]
+            if y_train.any():
+                intersection_date = list(set(X_train.index).intersection(set(y_train[y_train.isnull()].index)))
+                X_train.drop(intersection_date, inplace=True, axis=0)
                 y_train.dropna(inplace=True)
-                X_train.replace(np.inf, np.nan, inplace=True)
-                X_train.replace(-np.inf, np.nan, inplace=True)
-                y_train.replace(np.inf, np.nan, inplace=True)
-                y_train.replace(-np.inf, np.nan, inplace=True)
-                X_train.ffill(inplace=True)
-                y_train.ffill(inplace=True)
-                if transformation == 'log':
-                    """To be checked"""
-                    y_train.drop(X_train.loc[X_train.isnull().sum(axis=1) > 0].index, inplace=True, axis=0)
-                    X_train.drop(X_train.loc[X_train.isnull().sum(axis=1) > 0].index, inplace=True, axis=0)
-                if self._model_type != 'har_universal':
-                    y_train.where(
-                        ((y_train <= y_train.quantile(.75) + 1.5 * (y_train.quantile(.75) - y_train.quantile(.25))) &
-                         (y_train >= y_train.quantile(.25) - 1.5 * (y_train.quantile(.75) - y_train.quantile(.25)))),
-                        inplace=True)
-                else:
-                    y_train = \
-                        y_train.groupby(by=pd.Grouper(level=1), group_keys=True).apply(
-                            lambda x: x.where((x <= x.quantile(.75) + 1.5 * (x.quantile(.75) - x.quantile(.25))) &
-                                              (x >= x.quantile(.25) - 1.5 * (x.quantile(.75) - x.quantile(.25)))))
-                    y_train = y_train.droplevel(axis=0, level=0)
-                old_N = X_train.shape[0]
                 new_N = y_train.shape[0]
-                y_train = y_train if isinstance(y_train, pd.Series) else y_train.iloc[:, 0]
-                if y_train.any():
-                    intersection_date = list(set(X_train.index).intersection(set(y_train[y_train.isnull()].index)))
-                    X_train.drop(intersection_date, inplace=True, axis=0)
-                    y_train.dropna(inplace=True)
-                    new_N = y_train.shape[0]
-                y_train = y_train.loc[X_train.index]
-                if not cross:
-                    if self._model_type == 'har':
-                        ModelBuilder.outliers_dd[self._L].append(new_N / old_N)
-                    if (not X_train.filter(regex='_1W').empty) & (self._model_type != 'har_universal'):
-                        if X_train.filter(regex='_1W').iloc[:, 0].unique().shape[0] > 1:
-                            X_train = rv_1w_correction(X_train, self._L)
-                    elif (not X_train.filter(regex='_1W').empty) & (self._model_type == 'har_universal'):
-                        X_train = X_train.groupby(by=pd.Grouper(level=-1), group_keys=True).apply(rv_1w_correction)
-                        X_train = X_train.droplevel(axis=0, level=0)
-                else:
-                    if self._model_type != 'har_universal':
-                        ModelBuilder.outliers_dd[self._L].append(new_N / old_N)
-                if cross & (regression_type != 'linear') & (self._model_type != 'har_universal'):
-                    """
-                        Retrain XGBoost in the first iteration or once per month (as time consuming to train everyday)
-                        only for BTCUSDT. For other tokens, use model trained for BTCUSDT. 
-                    """
-                    if symbol == 'BTCUSDT':
-                        if (not ModelBuilder._ensemble_model_store_dd[self._model_type]) | (date.date().day == 1):
-                            rres = regression.fit(X_train, y_train)
-                            ModelBuilder._ensemble_model_store_dd[self._model_type][date] = rres
-                        else:
-                            rres = ModelBuilder._ensemble_model_store_dd[self._model_type][date-relativedelta(days=1)]
-                            ModelBuilder._ensemble_model_store_dd[self._model_type][date] = rres
+            y_train = y_train.loc[X_train.index]
+            if not cross:
+                if self._model_type == 'har':
+                    ModelBuilder.outliers_dd[self._L].append(new_N / old_N)
+                if (not X_train.filter(regex='_1W').empty) & (self._model_type != 'har_universal'):
+                    if X_train.filter(regex='_1W').iloc[:, 0].unique().shape[0] > 1:
+                        X_train = rv_1w_correction(X_train, self._L)
+                elif (not X_train.filter(regex='_1W').empty) & (self._model_type == 'har_universal'):
+                    X_train = X_train.groupby(by=pd.Grouper(level=-1), group_keys=True).apply(rv_1w_correction)
+                    X_train = X_train.droplevel(axis=0, level=0)
+            else:
+                if self._model_type != 'har_universal':
+                    ModelBuilder.outliers_dd[self._L].append(new_N / old_N)
+            if cross & (regression_type != 'linear') & (self._model_type != 'har_universal'):
+                """
+                    Retrain XGBoost in the first iteration or once per month (as time consuming to train everyday)
+                    only for BTCUSDT. For other tokens, use model trained for BTCUSDT. 
+                """
+                if symbol == 'BTCUSDT':
+                    if (not ModelBuilder._ensemble_model_store_dd[self._model_type]) | (date.date().day == 1):
+                        rres = regression.fit(X_train, y_train)
+                        ModelBuilder._ensemble_model_store_dd[self._model_type][date] = rres
                     else:
-                        while not ModelBuilder._ensemble_model_store_dd[self._model_type].get(date):
-                            print(f'[Model Training]: Waiting for model to be trained on BTCUSDT on '
-                                  f'{date.strftime("%Y-%-m-%d")} - {symbol}.')
-                            time.sleep(.1)
-                        print(f'[Model Status]: Model trained on BTCUSDT on '
-                              f'{date.strftime("%Y-%-m-%d")} is available. Transfer can be done - {symbol}.')
-                        rres = ModelBuilder._ensemble_model_store_dd[self._model_type][date]
+                        rres = ModelBuilder._ensemble_model_store_dd[self._model_type][date-relativedelta(days=1)]
+                        ModelBuilder._ensemble_model_store_dd[self._model_type][date] = rres
                 else:
-                    rres = regression.fit(X_train, y_train)
-                if cross & (self._model_type != 'har_universal') & (regression_type != 'linear'):
+                    while not ModelBuilder._ensemble_model_store_dd[self._model_type].get(date):
+                        print(f'[Model Training]: Waiting for model to be trained on BTCUSDT on '
+                              f'{date.strftime("%Y-%-m-%d")} - {symbol}.')
+                        time.sleep(.1)
+                    print(f'[Model Status]: Model trained on BTCUSDT on '
+                          f'{date.strftime("%Y-%-m-%d")} is available. Transfer can be done - {symbol}.')
+                    rres = ModelBuilder._ensemble_model_store_dd[self._model_type][date]
+            else:
+                if (self._model_type == 'risk_metrics') & (not cross):
                     pass
                 else:
-                    coefficient.loc[date, :] = np.concatenate((np.array([rres.intercept_]), rres.coef_))
-                """Test set"""
-                test_date = (date + ModelBuilder.start_dd['1D']).date()
-                X_test, y_test = exog.loc[test_date.strftime('%Y-%m-%d'), :], endog.loc[test_date.strftime('%Y-%m-%d')]
-                y_test = y_test if isinstance(y_test, pd.Series) else y_test.iloc[:, 0]
+                    rres = regression.fit(X_train, y_train)
+            if cross & (self._model_type != 'har_universal') & (regression_type != 'linear'):
+                pass
+            else:
+                coefficient.loc[date, :] = \
+                    np.array([feature_obj.factor, (1-feature_obj.factor)]) \
+                        if ((self._model_type == 'risk_metrics') & (not cross)) \
+                        else np.concatenate((np.array([rres.intercept_]), rres.coef_))
+            """Test set"""
+            test_date = (date + ModelBuilder.start_dd['1D']).date()
+            X_test, y_test = exog.loc[test_date.strftime('%Y-%m-%d'), :], endog.loc[test_date.strftime('%Y-%m-%d')]
+            y_test = y_test if isinstance(y_test, pd.Series) else y_test.iloc[:, 0]
+            if (self._model_type == 'risk_metrics') & (not cross):
+                pass
+            else:
                 X_test = X_test.assign(const=1) if regression_type == 'linear' else X_test
-                X_test.replace(np.inf, np.nan, inplace=True)
-                X_test.replace(-np.inf, np.nan, inplace=True)
-                y_test.replace(np.inf, np.nan, inplace=True)
-                y_test.replace(-np.inf, np.nan, inplace=True)
-                X_test.ffill(inplace=True)
-                y_test.ffill(inplace=True)
+            X_test.replace(np.inf, np.nan, inplace=True)
+            X_test.replace(-np.inf, np.nan, inplace=True)
+            y_test.replace(np.inf, np.nan, inplace=True)
+            y_test.replace(-np.inf, np.nan, inplace=True)
+            X_test.ffill(inplace=True)
+            y_test.ffill(inplace=True)
+            if (self._model_type == 'risk_metrics') & (not cross):
+                y_hat = \
+                X_test.iloc[:, 0]*coefficient.loc[date, :].iloc[0]+X_test.iloc[:, 1]*coefficient.loc[date, :].iloc[1]
+            else:
                 y_hat = \
                     rres.predict(X_test.drop('const', axis=1)) if regression_type == 'linear' else rres.predict(X_test)
-                y_hat = \
-                    pd.Series(data=ModelBuilder._factory_transformation_dd[transformation]['inverse'](y_hat),
-                              index=y_test.index)
-                y_test = \
-                    pd.Series(data=ModelBuilder._factory_transformation_dd[transformation]['inverse'](y_test.values),
-                              index=y_test.index, name=y_series_test_name_dd[self._model_type=='har_universal'])
-                y.append(pd.concat([y_test, y_hat], axis=1))
-                # """Tstats"""
-                # tstats.loc[date, :] = \
-                #     coefficient.loc[date, :].div((np.diag(np.matmul(X_train.values.transpose(),
-                #                                                     X_train.values))/np.sqrt(X_train.shape[0])))
-                # """Pvalues"""
-                # pvalues.loc[date, :] = \
-                #     2*(1-t.cdf(tstats.loc[date, :].values, df=X_train.shape[0]-coefficient.shape[1]-1))
-        else:
-            coefficient.drop('const', axis=1, inplace=True)
-            coefficient.iloc[:, 0] = feature_obj.factor
-            coefficient.iloc[:, 1] = (1 - feature_obj.factor)
-            y_hat = coefficient.mul(exog).sum(axis=1)
-            y.append(pd.concat([endog, y_hat], axis=1))
+            y_hat = \
+                pd.Series(data=ModelBuilder._factory_transformation_dd[transformation]['inverse'](y_hat),
+                          index=y_test.index)
+            y_test = \
+                pd.Series(data=ModelBuilder._factory_transformation_dd[transformation]['inverse'](y_test.values),
+                          index=y_test.index, name=y_series_test_name_dd[self._model_type == 'har_universal'])
+            y.append(pd.concat([y_test, y_hat], axis=1))
+            # """Tstats"""
+            # tstats.loc[date, :] = \
+            #     coefficient.loc[date, :].div((np.diag(np.matmul(X_train.values.transpose(),
+            #                                                     X_train.values))/np.sqrt(X_train.shape[0])))
+            # """Pvalues"""
+            # pvalues.loc[date, :] = \
+            #     2*(1-t.cdf(tstats.loc[date, :].values, df=X_train.shape[0]-coefficient.shape[1]-1))
         y = pd.concat(y).resample(self._s).sum() if self._model_type != 'har_universal' \
-            else pd.concat(y).groupby(by=[pd.Grouper(level=-1), pd.Grouper(level=0)]).sum()
+            else pd.concat(y).groupby(by=[pd.Grouper(level=-1), pd.Grouper(level=0, freq=self._s)]).sum()
         y = y.swaplevel(i='timestamp', j='symbol') if self._model_type == 'har_universal' else y
         tmp = y.groupby(by=pd.Grouper(level=0, freq=kwargs['agg'])) if self._model_type != 'har_universal' else \
         y.groupby(by=[pd.Grouper(level=-1), pd.Grouper(level=0, freq=kwargs['agg'])])
@@ -461,14 +481,14 @@ class ModelBuilder:
             qlike = qlike.swaplevel(i='timestamp', j='symbol')
             mse = mse.groupby(by=[pd.Grouper(level=-1),
                                   pd.Grouper(level=0,
-                                             freq=kwargs['agg'])]).sum().groupby(by=pd.Grouper(level=-1)).mean()
+                                             freq=kwargs['agg'])]).mean().groupby(by=pd.Grouper(level=-1)).mean()
             r2 = r2.groupby(by=[pd.Grouper(level=-1),
                                 pd.Grouper(level=0, freq=kwargs['agg'])]).mean().groupby(by=pd.Grouper(level=-1)).mean()
             qlike = qlike.groupby(by=[pd.Grouper(level=-1),
                                       pd.Grouper(level=0,
                                                  freq=kwargs['agg'])]).mean().groupby(by=pd.Grouper(level=-1)).mean()
         else:
-            mse = mse.resample(kwargs['agg']).sum()
+            mse = mse.resample(kwargs['agg']).mean()
             qlike = qlike.resample(kwargs['agg']).mean()
             r2 = r2.resample(kwargs['agg']).mean()
         mse = pd.Series(mse, name=symbol)
