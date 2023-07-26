@@ -14,6 +14,20 @@ class Reader:
     def __init__(self, file: typing.Union[typing.List[str], str] = os.path.abspath('./data_centre/tmp/aggregate2022')):
         self._directory = file
 
+    def prices_read(self) -> pd.DataFrame:
+        prices = pd.read_parquet(os.path.abspath(self._directory)).set_index('timestamp')
+        prices.index = pd.to_datetime(prices.index)
+        prices = prices.groupby(by='symbol', group_keys=True).apply(lambda x: x[['askPx', 'bidPx']].mean(axis=1))
+        prices = prices.transpose().drop('BUSDUSDT', axis=1)
+        return prices
+    def volumes_read(self) -> pd.DataFrame:
+        volumes = pd.read_parquet(os.path.abspath(self._directory)).set_index('timestamp')
+        volumes.index = pd.to_datetime(volumes.index)
+        volumes = volumes.groupby(by='symbol', group_keys=True).apply(lambda x: x[['askQty', 'bidQty']].mean(axis=1))
+        volumes = volumes.transpose().drop('BUSDUSDT', axis=1)
+        return volumes
+
+
     def returns_read(self, cutoff_low: float = .01, cutoff_high: float = .01, raw: bool=False,
                      resampled: bool=True, symbol: typing.Union[typing.List[str], str]=None) -> pd.DataFrame:
         returns_df = pd.read_parquet(os.path.abspath(self._directory), columns=['timestamp', 'pret_1m', 'symbol'])
@@ -44,7 +58,7 @@ class Reader:
         rv_df = rv_df.resample('5T').sum() if variance else rv_df.resample('5T').sum()**.5
         return rv_df
 
-    def cdr_read(self, cutoff_low: float = .05, cutoff_high: float = .05) -> pd.DataFrame:
+    def cdr_read(self, cutoff_low: float = .0001, cutoff_high: float = .0001) -> pd.DataFrame:
         cdr_df = pd.read_parquet(os.path.abspath(self._directory),
                                  columns=['timestamp', 'volBuyQty', 'volSellQty', 'symbol'])
         cdr_df = cdr_df.set_index((['timestamp', 'symbol']))
@@ -57,7 +71,7 @@ class Reader:
         return cdr_df
 
     def csr_read(self, feature_range: typing.Tuple[float] = None,
-                 cutoff_low: float = .01, cutoff_high: float = .01) -> pd.DataFrame:
+                 cutoff_low: float = .0001, cutoff_high: float = .0001) -> pd.DataFrame:
         if feature_range:
             Reader._min_max_scaler.feature_range = feature_range
         csr_df = pd.read_parquet(os.path.abspath(self._directory),

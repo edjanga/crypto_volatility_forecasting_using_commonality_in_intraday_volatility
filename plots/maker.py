@@ -725,7 +725,7 @@ class PlotResults:
         """
         Plot bar plot
         """
-        fig_title = f'Coefficient {L} {cross} {transformation}: Bar plot'
+        fig_title = f'Coefficient {L} {cross} {transformation} {regression_type}: Bar plot'
         fig = px.bar(coefficient, x='params', y='value', color='model', barmode='group', title=fig_title)
         if save:
             fig.write_image(os.path.abspath(f'./plots/coefficient_{L}_{cross}_{transformation}_'
@@ -763,7 +763,7 @@ class PlotResults:
         row_grid = 3
         fig = make_subplots(rows=row_grid, cols=col_grid,
                             row_titles=['average R2', 'average MSE', 'average QLIKE'], shared_xaxes=True)
-        fig_title = f'Rolling metrics {L} {cross} {transformation}'
+        fig_title = f'Rolling metrics {L} {cross} {transformation} {regression_type}'
         idx_common = r2.groupby(by='model', group_keys=True).apply(lambda x: x.index)['har']
         for i, model in enumerate(models_ls):
             if model:
@@ -852,11 +852,12 @@ class PlotResults:
             for k, bar in enumerate(data_bar_plot_ls):
                 subfig.add_trace(bar)
                 fig.add_trace(subfig.data[k], row=i+1, col=1)
-        fig_title = f'Rolling metrics {L} {cross} {transformation}: Bar plot'
+        fig_title = f'Rolling metrics {L} {cross} {transformation} {regression_type}: Bar plot'
         fig.update_layout(height=900, width=1200, title={'text': fig_title}, barmode='group')
         mean_dd = {True:'mean', False: 'witout_mean'}
         if save:
-            fig.write_image(os.path.abspath(f'./plots/rolling_metrics_bar_plot_{L}_{cross}_{transformation}.png'))
+            fig.write_image(
+                os.path.abspath(f'./plots/rolling_metrics_bar_plot_{L}_{cross}_{transformation}_{regression_type}.png'))
         else:
             fig.show()
 
@@ -882,7 +883,7 @@ class PlotResults:
         col_grid = 1
         row_grid = len(models_ls) + 1
         fig = make_subplots(rows=row_grid, cols=col_grid, row_titles=models_ls, shared_xaxes=shared_xaxes)
-        fig_title = f'Scatter plot - {L} {cross} {transformation}'
+        fig_title = f'Scatter plot - {L} {cross} {transformation} {regression_type}'
         for i, model in enumerate(models_ls):
             if model:
                 tmp_df = y.query(f'model == "{model}"')
@@ -922,7 +923,7 @@ class PlotResults:
         col_grid = 1
         row_grid = len(models_ls) + 1
         fig = make_subplots(rows=row_grid, cols=col_grid, row_titles=models_ls)
-        fig_title = f'Distributions - {L} {cross} {transformation}'
+        fig_title = f'Distributions - {L} {cross} {transformation} {regression_type}'
         for i, model in enumerate(models_ls):
             if model:
                 tmp_df = y.query(f'model == "{model}"')
@@ -969,7 +970,7 @@ if __name__ == '__main__':
     #pdb.set_trace()
     plot_results_obj = PlotResults()
     # plot_results_obj.rolling_outliers(test=test, save=save)
-    L = ['1D', '1W', '1M']
+    L = ['1D', '1W', 'SAM']
     cross_name_dd = {False: 'not_crossed'}#{True: 'cross'}#{False: 'not_crossed', True: 'cross'}
     transformation_dd = {None: 'level'}#, 'log': 'log'}
     regression_type = 'linear'

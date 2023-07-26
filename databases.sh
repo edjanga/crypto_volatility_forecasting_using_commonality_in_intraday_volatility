@@ -5,3 +5,5 @@ touch ./data_centre/databases/qlike.db
 touch ./data_centre/databases/coefficients.db
 touch ./data_centre/databases/tstats.db
 touch ./data_centre/databases/pvalues.db
+touch ./data_centre/databases/performance.db
+touch ./data_centre/databases/rolling_metrics.db

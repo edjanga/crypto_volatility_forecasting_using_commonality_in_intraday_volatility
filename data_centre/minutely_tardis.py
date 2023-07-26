@@ -39,7 +39,7 @@ def generate_data_per_tag(tag: str) -> None:
     """
     book_snapshot_5 = data_dd['book_snapshot_5'].drop(['exchange', 'local_timestamp'], axis=1)
     book_snapshot_5 = book_snapshot_5.filter(regex=f'symbol|(bids|asks)\[[0]\]')
-    book_snapshot_5 = book_snapshot_5.resample('T').last()
+    book_snapshot_5 = book_snapshot_5.resample('1T').last()
 
     def sidePxQty(df: pd.DataFrame, side: str) -> None:
         df[f'{side}Px'] = df[f'{side}s[0].price']
@@ -47,15 +47,13 @@ def generate_data_per_tag(tag: str) -> None:
         df.drop([f'{side}s[0].price', f'{side}s[0].amount'], axis=1, inplace=True)
     sidePxQty(book_snapshot_5, 'bid')
     sidePxQty(book_snapshot_5, 'ask')
-    # with concurrent.futures.ThreadPoolExecutor() as executor:
-    #     sidePxQty_results = \
-    #         {side: executor.submit(sidePxQty, book_snapshot_5, side) for _, side in enumerate(['bid', 'ask'])}
     mid_prices = book_snapshot_5.filter(regex='Px').mean(axis=1)
-    book_snapshot_5.loc[:, 'pret_1m'] = np.log(mid_prices/mid_prices.shift())
+    book_snapshot_5 = book_snapshot_5.assign(pret_1m=np.log(mid_prices/mid_prices.shift()))
     book_snapshot_5 = book_snapshot_5[list(set(columns_names_ls).intersection(set(book_snapshot_5.columns)))]
+    #To be investigated
     timeHMs_ls = [''.join((h, m)) for h, m in zip(book_snapshot_5.index.strftime('%H'),
                                                   book_snapshot_5.index.strftime('%M'))]
-    book_snapshot_5.loc[:, 'timeHMs'] = timeHMs_ls
+    book_snapshot_5 = book_snapshot_5.assign(timeHMs=timeHMs_ls)
     book_snapshot_5.loc[:, 'timeHMe'] = book_snapshot_5.timeHMs.shift(-1)
     timeHMe_ls = ['0000' if hhmm is None else hhmm for hhmm in book_snapshot_5.timeHMe]
     book_snapshot_5.loc[:, 'timeHMe'] = timeHMe_ls

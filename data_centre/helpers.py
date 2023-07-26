@@ -1,5 +1,5 @@
 """Largest coins - To be queried against USDT"""
-coin_ls = ['btc', 'eth', 'bnb', 'xrp', 'ada', 'ltc', 'etc', 'matic', 'ftm', 'doge','shib',
+coin_ls = ['btc', 'eth', 'bnb', 'xrp', 'ada', 'ltc', 'etc', 'matic', 'ftm', 'doge', 'shib',
            'link', 'avax', 'atom', 'trx']#, 'eos', 'xlm', 'zec', 'neo', 'dash', 'grt', 'snx', 'dydx',
            #'dot', 'fil', 'cfx', 'apt', 'sol', 'shib']
 """Intersection of the top 10 largest spot exchanges listed by CoinMarketCap
