@@ -19,4 +19,5 @@ correct_commit.sh
 plots/tmp
 plots/tmp/
 plots/*.png
-data_centre/.env
+minutelyTARDIS.sh
+data_centre/*tardis*
