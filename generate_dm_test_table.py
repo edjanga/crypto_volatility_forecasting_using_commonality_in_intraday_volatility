@@ -12,5 +12,6 @@ if __name__ == '__main__':
     dm_table = dm_test_object.table(L=args.L, training_scheme=args.training_scheme)
     dm_table = dm_table.dropna(how='all').dropna(how='all', axis=1)
     dm_table = dm_table.droplevel(axis=1, level=1).droplevel(axis=0, level=1)
+    pdb.set_trace()
     dm_table.fillna('\\cellcolor{black}', inplace=True)
     subprocess.run("pbcopy", text=True, input=dm_table.to_latex(multirow=True, multicolumn=True))

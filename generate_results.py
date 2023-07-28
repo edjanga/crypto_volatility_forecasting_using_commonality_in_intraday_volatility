@@ -62,7 +62,7 @@ if __name__ == '__main__':
     """
     Generate all tables for model L, F cross
     """
-    if model_builder_obj.model_type in ['har', 'har_dummy_markets', 'har_universal', 'ar', 'risk_metrics']:
+    if model_builder_obj.model_type in ['har', 'har_mkt', 'har_universal', 'ar', 'risk_metrics']:
         model_builder_obj.add_metrics(df=rv, agg=agg, transformation=args.transformation,
                                       regression_type=regression_type, training_scheme=args.training_scheme)
     elif model_builder_obj.model_type == 'har_cdr':

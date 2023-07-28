@@ -55,8 +55,8 @@ class Plot:
 
     def histogram(self) -> None:
         col_grid = 3
-        row_grid = len(coin_ls)//col_grid
-        sym_ls = [''.join((coin, 'usdt')).upper() for _, coin in enumerate(coin_ls)]
+        row_grid = 2#len(coin_ls)//col_grid
+        sym_ls = [''.join((coin, 'usdt')).upper() for _, coin in enumerate(coin_ls[:6])]
         fig = make_subplots(rows=row_grid, cols=col_grid, subplot_titles=sym_ls)
         for row in range(1, row_grid+1):
             for col in range(1, col_grid+1):
@@ -68,10 +68,7 @@ class Plot:
                                            marker_color='#34A853', opacity=0.75), row=row, col=col)
         fig.update_layout(title='Returns and Realised Volatility: Distributions (5min bucket).',
                           height=1500, width=1200, showlegend=False)
-        if 'distribution_returns_rv.png' not in os.listdir(os.path.abspath('./')):
-            fig.write_image(os.path.abspath('./distribution_returns_rv.png'))
-        else:
-            fig.show()
+        fig.write_image(os.path.abspath('./plots/distribution_returns_rv.png'))
 
     def daily_realised_vol(self) -> None:
         daily_realised_vol_df = pd.DataFrame()

@@ -124,7 +124,9 @@ class FeatureRiskMetricsEstimator(FeatureBuilderBase):
         symbol_df = FeatureRiskMetricsEstimator.data_obj.returns_read(raw=False, symbol=list_symbol)
         symbol_df = symbol_df.rename(columns={sym: '_'.join((sym, 'RET', F[0])) for sym in symbol_df.columns})
         symbol_df = symbol_df.sub(symbol_df.mean())**2
-        #symbol_df = symbol_df.shift(FeatureRiskMetricsEstimator._lookback_window_dd[F[0]]).dropna()
+        symbol_df = symbol_df.shift(FeatureRiskMetricsEstimator._lookback_window_dd[F[0]]).dropna()
+        symbol_df = symbol_df.join(FeatureRiskMetricsEstimator.data_obj.rv_read(symbol=list_symbol),
+                                   how='left')
         symbol_df.columns.name = None
         return symbol_df
 
@@ -154,10 +156,10 @@ class FeatureHAR(FeatureBuilderBase):
         return symbol_df
 
 
-class FeatureHARDummy(FeatureBuilderBase):
+class FeatureHARMkt(FeatureBuilderBase):
 
     def __init__(self):
-        super().__init__('har_dummy_markets')
+        super().__init__('har_mkt')
         self._markets = Market()
 
     @property
@@ -222,7 +224,7 @@ class FeatureHARDummy(FeatureBuilderBase):
         if odds:
             symbol_df[['asia_session', 'us_session', 'europe_session']] = \
                 symbol_df[['asia_session', 'us_session', 'europe_session']].groupby(
-                by=symbol_df.index.date).apply(lambda x: FeatureHARDummy.binary_to_odds(x))
+                by=symbol_df.index.date).apply(lambda x: FeatureHARMkt.binary_to_odds(x))
         return symbol_df
 
 

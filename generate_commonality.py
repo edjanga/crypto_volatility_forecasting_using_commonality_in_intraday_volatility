@@ -16,7 +16,5 @@ if __name__ == '__main__':
     if args.generate:
         commonality_obj = Commonality(L=args.L, transformation=args.transformation)
         commonality_obj.commonality()
-    else:
-        pdb.set_trace()
     plot_results_obj = PlotResults()
     plot_results_obj.commonality(args.save)

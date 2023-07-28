@@ -13,7 +13,7 @@ if __name__ == '__main__':
     parser.add_argument('--training_scheme', default=False, help='Training scheme under which models are trained.',
                         type=str)
     parser.add_argument('--save', default=True, help='Whether to save plots or not.', type=bool)
-    parser.add_argument('--models', default=['har', 'har_dummy_markets', 'har_cdr', 'har_csr', 'har_universal'],
+    parser.add_argument('--models', default=['har', 'har_mkt', 'har_cdr', 'har_csr', 'har_universal'],
                         help='List of models to fit.')
     parser.add_argument('--L', default='1D', help='Lookback window.')
     parser.add_argument('--regression_type', default='linear', help='For cross whether to allow for ensemble or not.')

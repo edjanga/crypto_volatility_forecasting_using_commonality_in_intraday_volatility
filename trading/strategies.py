@@ -95,8 +95,10 @@ if __name__ == '__main__':
                          kurtosis(returns)*((pd.to_timedelta('1Y')//pd.to_timedelta(trader_obj._hp*trader_obj._h))**.5),
                          sharpe=stats['mean'].div(stats['std']))
     stats = stats.round(4)
+    cumPnL = pd.concat(trader_obj.PnL_dd, axis=1)
+    PnL_per_day = cumPnL.diff().fillna(0).mean()
+    stats['PnL/day'] = PnL_per_day
     print(stats.sort_values(by='sharpe', ascending=False).to_latex())
-    cumPnL = pd.concat(trader_obj.PnL_dd, axis=1)#.droplevel(axis=1, level=0)
     vwap = np.log(trader_obj._benchmark/trader_obj._benchmark.shift()).mean(axis=1).cumsum().fillna(0)
     vwap.name = 'VWAP'
     cumPnL = cumPnL.assign(VWAP=vwap)

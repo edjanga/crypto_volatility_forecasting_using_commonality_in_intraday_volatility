@@ -2,6 +2,7 @@ venv/
 venv
 .DS_Store
 ./slurm-%j.out
+data_centre/.env
 data_centre/tmp
 data_centre/tmp/
 data_centre/databases

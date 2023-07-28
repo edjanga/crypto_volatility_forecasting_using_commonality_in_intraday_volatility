@@ -19,7 +19,7 @@ from scipy.stats import t
 import sqlite3
 from sklearn.metrics import silhouette_score
 from model.feature_engineering_room import FeatureAR, FeatureRiskMetricsEstimator, FeatureHAR,\
-    FeatureHARDummy, FeatureHARCDR, FeatureHARCSR
+    FeatureHARMkt, FeatureHARCDR, FeatureHARCSR
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 import threading
@@ -43,13 +43,13 @@ def flatten(ls: list()) -> list:
 
 
 class ModelBuilder:
-    _filter_dd = {'har': lambda x: f'{x}_', 'har_dummy_markets': lambda x: f'{x}_|session',
+    _filter_dd = {'har': lambda x: f'{x}_', 'har_mkt': lambda x: f'{x}_|session',
                   'har_cdr': lambda x: f'{x}_|{x}_CDR', 'har_csr': lambda x: f'{x}_|{x}_CSR_',
                   'risk_metrics': lambda x: f'{x}_|{x}_RET', 'ar': lambda x: f'{x}_'}
     _transformation_dd = {None: 'level', 'log': 'log'}
-    _training_schemes = ['SAM', 'ClustAM', 'UAM']
+    _training_schemes = ['SAM', 'ClustAM', 'CAM']
     _factory_model_type_dd = {'ar': FeatureAR(), 'risk_metrics': FeatureRiskMetricsEstimator(), 'har': FeatureHAR(),
-                              'har_dummy_markets': FeatureHARDummy(), 'har_cdr': FeatureHARCDR(),
+                              'har_mkt': FeatureHARMkt(), 'har_cdr': FeatureHARCDR(),
                               'har_csr': FeatureHARCSR()}
     _params_grid_dd = {'xgboost': {'n_estimators': [100, 500, 1_000],
                                    'lambda': np.linspace(0.1, 1, 10).tolist(),
@@ -62,7 +62,7 @@ class ModelBuilder:
     _pca_obj = PCA()
     _factory_transformation_dd = {'log': {'transformation': np.log, 'inverse': np.exp},
                                   None: {'transformation': lambda x: x, 'inverse': lambda x: x}}
-    models = [None, 'ar', 'risk_metrics', 'har', 'har_dummy_markets', 'har_cdr', 'har_csr', 'har_universal']
+    models = [None, 'ar', 'risk_metrics', 'har', 'har_mkt', 'har_cdr', 'har_csr', 'har_universal']
     models_rolling_metrics_dd = {model: dict([('qlike', {}), ('r2', {}), ('mse', {}),
                                               ('tstats', {}), ('pvalues', {}), ('coefficient', {})])
                                  for _, model in enumerate(models) if model}
@@ -279,41 +279,32 @@ class ModelBuilder:
             (self._model_type == 'risk_metrics') & (training_scheme == 'SAM') & (regression_type == 'linear')
         stats_condition = not stats_condition
         feature_obj = ModelBuilder._factory_model_type_dd[self._model_type]
-        if training_scheme != 'SAM':
-            exog = feature_obj.builder(symbol=exog.columns, df=exog, F=self._F)
-        endog = exog.pop(symbol) if self._model_type != 'risk_metrics' else exog.copy()
+        exog = feature_obj.builder(symbol=exog.columns, df=exog, F=self._F)
+        endog = exog.pop(symbol)
         endog.replace(0, np.nan, inplace=True)
         endog.ffill(inplace=True)
         y = list()
-        if not ((self._model_type == 'risk_metrics') & (training_scheme == 'SAM')):
-            L_train = ModelBuilder.L_shift_dd[self._L]
-            test_size = pd.to_timedelta('1D')//pd.to_timedelta(self._b)
-            split_obj = TimeSeriesSplit(n_splits=round((exog.shape[0]-L_train)//test_size),
-                                        max_train_size=L_train, test_size=test_size, gap=0)
+        L_train = ModelBuilder.L_shift_dd[self._L]
+        test_size = pd.to_timedelta('1D')//pd.to_timedelta(self._b)
+        split_gen = TimeSeriesSplit(n_splits=round((exog.shape[0] - L_train) // test_size),
+                                    max_train_size=L_train, test_size=test_size, gap=0)
         if self._model_type == 'risk_metrics':
-            returns2 = endog.copy()
-            exog = \
-            ModelBuilder._factory_transformation_dd[transformation]['transformation'](
-                returns2.ewm(alpha=feature_obj.factor).mean())
+            returns2 = ModelBuilder._factory_transformation_dd[transformation]['transformation'](exog).copy()
+            y_test = ModelBuilder._factory_transformation_dd[transformation]['transformation'](endog.copy())
             if training_scheme == 'SAM':
-                exog.columns = [0]
-                y_hat = exog
-                y_test = ModelBuilder._factory_transformation_dd[transformation]['transformation']\
-                    (ModelBuilder.reader_obj.rv_read(symbol=symbol).iloc[:, 0])
-                y.append(ModelBuilder._factory_transformation_dd[transformation]['inverse']
-                         (pd.concat([y_test, y_hat], axis=1)))
+                for i, (train_index, test_index) in enumerate(split_gen.split(exog)):
+                    y_hat = \
+                        returns2.iloc[np.hstack((train_index, test_index))].ewm(
+                            alpha=feature_obj.factor).mean().iloc[L_train:, 0]
+                    y.append(ModelBuilder._factory_transformation_dd[transformation]['inverse']
+                             (pd.concat([y_test.iloc[test_index], y_hat], axis=1)))
             else:
                 idx_ls = pd.to_datetime(list(exog.groupby(exog.index.date).groups.keys()), utc=True)
                 coefficient = pd.DataFrame(index=idx_ls, columns=['const'] + exog.columns.tolist(), data=np.nan)
-                rv = \
-                    ModelBuilder._factory_transformation_dd[transformation]['transformation'](
-                        ModelBuilder.reader_obj.rv_read(symbol=symbol))
                 rres = factory_regression_dd[regression_type]
-                split_gen = TimeSeriesSplit(max_train_size=L_train, test_size=test_size, gap=0,
-                                            n_splits=exog.shape[0] // (L_train + test_size))
                 for i, (train_index, test_index) in enumerate(split_gen.split(exog)):
-                    X_train, y_train = exog.iloc[train_index, :], rv.iloc[train_index]
-                    X_test, y_test = exog.iloc[test_index, :], rv.iloc[test_index]
+                    X_train, y_train = exog.iloc[train_index, :], endog.iloc[train_index]
+                    X_test, y_test = exog.iloc[test_index, :], endog.iloc[test_index]
                     rres.fit(X_train, y_train)
                     y_hat = pd.Series(data=rres.predict(X_test).reshape(1, -1)[0], index=y_test.index)
                     y.append(ModelBuilder._factory_transformation_dd[transformation]['inverse']
@@ -339,15 +330,10 @@ class ModelBuilder:
             rres = factory_regression_dd[regression_type]
             idx_ls = pd.to_datetime(list(exog.groupby(exog.index.date).groups.keys()), utc=True)
             coefficient = pd.DataFrame(index=idx_ls, columns=['const']+exog.columns.tolist(), data=np.nan)
-            for _, (train_index, test_index) in enumerate(split_obj.split(exog)):
+            for _, (train_index, test_index) in enumerate(split_gen.split(exog)):
                 X_train, y_train = exog.iloc[train_index, :], endog.iloc[train_index]
                 X_test, y_test = exog.iloc[test_index, :], endog.iloc[test_index]
-                try:
-                    rres.fit(X_train, y_train)
-                except ValueError as e:
-                    print(e)
-                    print(symbol)
-                    pdb.set_trace()
+                rres.fit(X_train, y_train)
                 y_hat = pd.Series(data=rres.predict(X_test), index=y_test.index)
                 y.append(pd.concat([y_test, y_hat], axis=1))
                 """ Coefficients """
@@ -429,6 +415,7 @@ class ModelBuilder:
         self.rolling_metrics(symbol=symbol, training_scheme=training_scheme, exog=exog,
                              regression_type=regression_type, transformation=transformation, agg=agg)
         y = ModelBuilder._training_scheme_y_dd[training_scheme][symbol]
+        y.columns = y.columns.str.replace(f'{symbol}_RET_{self._h}','y_hat')
         r2 = ModelBuilder._training_scheme_r2_dd[training_scheme][symbol]
         qlike = ModelBuilder._training_scheme_qlike_dd[training_scheme][symbol]
         mse = ModelBuilder._training_scheme_mse_dd[training_scheme][symbol]
@@ -451,7 +438,7 @@ class ModelBuilder:
                     **kwargs) -> None:
         for symbol in ModelBuilder.coins:
             if training_scheme == 'SAM':
-                if self._model_type in ['ar', 'har', 'har_dummy_markets', 'risk_metrics']:
+                if self._model_type in ['ar', 'har', 'har_mkt', 'risk_metrics']:
                     exog = \
                         ModelBuilder._factory_model_type_dd[self._model_type].builder(F=self._F, df=kwargs['df'],
                                                                                       symbol=symbol)
@@ -463,7 +450,7 @@ class ModelBuilder:
                 """Number of cluster selection procedure"""
                 silhouette = list()
                 tmp = kwargs['df'].transpose().copy()
-                for k in range(1, len(ModelBuilder.coins)+1):
+                for k in range(2, len(ModelBuilder.coins)-1):
                     ModelBuilder._kmeans.n_clusters = k
                     ModelBuilder._kmeans.fit(tmp)
                     silhouette.append(silhouette_score(tmp, ModelBuilder._kmeans.labels_))
@@ -477,7 +464,7 @@ class ModelBuilder:
                     if symbol in members:
                         members_ls = members
                 exog = kwargs['df'].loc[:, members_ls]
-            elif training_scheme == 'UAM':
+            elif training_scheme == 'CAM':
                 exog = kwargs['df']
             self.add_metrics_per_symbol(symbol, training_scheme, exog, kwargs['agg'], regression_type,
                                         transformation)
@@ -497,11 +484,11 @@ class DMTest:
         """
         regression_per_training_scheme_dd = {'SAM': ['linear', 'lasso', 'ridge', 'elastic'],
                                              'ClustAM': ['lasso', 'ridge', 'elastic'],
-                                             'UAM': ['lasso', 'ridge', 'elastic']}
+                                             'CAM': ['lasso', 'ridge', 'elastic']}
         models_dd = dict()
-        for scheme in ['SAM', 'ClustAM', 'UAM']:
+        for scheme in ['SAM', 'ClustAM', 'CAM']:
             for regression in regression_per_training_scheme_dd[scheme]:
-                for model in ['risk_metrics', 'ar', 'har', 'har_dummy_markets']:
+                for model in ['risk_metrics', 'ar', 'har', 'har_mkt']:
                     query = f'SELECT "timestamp", ("y"/"y_hat") * ( "y"-"y_hat") AS "e", "symbol" '\
                             f'FROM (SELECT "timestamp", "y", "y_hat", "symbol", "model", "L", "training_scheme",' \
                             f'"regression" FROM y_{L} WHERE "training_scheme" = \"{scheme}\" AND ' \
