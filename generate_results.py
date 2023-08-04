@@ -38,7 +38,7 @@ if __name__ == '__main__':
     if 'har_csr' in models:
         csr = data_obj.csr_read()
     save = args.save
-    rv = data_obj.rv_read(variance=False)
+    rv = data_obj.rv_read(variance=True)
     F = args.F
     regression_type = args.regression_type
     model_builder_obj = ModelBuilder(F=F, h='30T', L=args.L, Q='1D', model_type=models[0])

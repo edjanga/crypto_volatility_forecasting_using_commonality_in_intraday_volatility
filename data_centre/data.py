@@ -14,11 +14,15 @@ class Reader:
     def __init__(self, file: typing.Union[typing.List[str], str] = os.path.abspath('./data_centre/tmp/aggregate2022')):
         self._directory = file
 
-    def prices_read(self) -> pd.DataFrame:
+    def prices_read(self, symbol: typing.Union[str, typing.List[str]] = None) -> pd.DataFrame:
         prices = pd.read_parquet(os.path.abspath(self._directory)).set_index('timestamp')
         prices.index = pd.to_datetime(prices.index)
         prices = prices.groupby(by='symbol', group_keys=True).apply(lambda x: x[['askPx', 'bidPx']].mean(axis=1))
         prices = prices.transpose().drop('BUSDUSDT', axis=1)
+        if symbol:
+            if isinstance(symbol, str):
+                symbol = [symbol]
+            prices = prices[symbol]
         return prices
     def volumes_read(self) -> pd.DataFrame:
         volumes = pd.read_parquet(os.path.abspath(self._directory)).set_index('timestamp')
@@ -26,7 +30,6 @@ class Reader:
         volumes = volumes.groupby(by='symbol', group_keys=True).apply(lambda x: x[['askQty', 'bidQty']].mean(axis=1))
         volumes = volumes.transpose().drop('BUSDUSDT', axis=1)
         return volumes
-
 
     def returns_read(self, cutoff_low: float = .01, cutoff_high: float = .01, raw: bool=False,
                      resampled: bool=True, symbol: typing.Union[typing.List[str], str]=None) -> pd.DataFrame:
@@ -100,3 +103,9 @@ class Reader:
         correlation.name = 'CORR'
         correlation = pd.DataFrame(correlation)
         return correlation
+
+
+if __name__ == '__main__':
+    reader_obj = Reader(file=os.path.abspath('./tmp/aggregate2022'))
+    prices = reader_obj.prices_read(symbol=['BTCUSDT', 'ETHUSDT'])
+    pdb.set_trace()

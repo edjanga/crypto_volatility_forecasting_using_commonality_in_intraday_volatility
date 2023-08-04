@@ -26,7 +26,8 @@ import seaborn as sns
 import sqlite3
 from sklearn.metrics import silhouette_score
 from sklearn.cluster import KMeans
-
+import plotly.io as pio
+pio.kaleido.scope.mathjax = None
 class EDA:
 
     reader_object = Reader()
@@ -44,16 +45,15 @@ class EDA:
             kmeans.n_clusters = k
             kmeans.fit(tmp)
             silhouette.append(silhouette_score(tmp, kmeans.labels_))
-        if not os.path.exists('./plots/n_clusters.pdf'):
-            fig = make_subplots(rows=1, cols=1)
-            fig.add_traces(data=go.Bar(x=list(range(2, len(silhouette) + 2)), y=silhouette, showlegend=False))
-            fig.add_traces(data=go.Scatter(name='k', x=list(range(2, len(silhouette) + 2)),
-                                           marker=dict(size=15), y=silhouette, showlegend=False))
-            fig.update_xaxes(title='Number of clusters')
-            fig.update_yaxes(title='Silhouette score')
-            fig.update_layout(title='Optimal number of clusters: Analysis')
-            fig.write_image(os.path.abspath('./plots/n_clusters.pdf'))
-            print(f'[Plots]: Selection optimal cluster plot has been generated.')
+        fig = make_subplots(rows=1, cols=1)
+        fig.add_traces(data=go.Bar(x=list(range(2, len(silhouette) + 2)), y=silhouette, showlegend=False))
+        fig.add_traces(data=go.Scatter(name='k', x=list(range(2, len(silhouette) + 2)),
+                                       marker=dict(size=15), y=silhouette, showlegend=False))
+        fig.update_xaxes(title='Number of clusters')
+        fig.update_yaxes(title='Silhouette score')
+        fig.update_layout(title='Optimal number of clusters: Analysis')
+        fig.write_image(os.path.abspath('./plots/n_clusters.pdf'))
+        print(f'[Plots]: Selection optimal cluster plot has been generated.')
 
     def daily_rv(self) -> None:
         daily_rv_df = pd.DataFrame()
@@ -368,7 +368,6 @@ class PlotResults:
         """
         Query data
         """
-        #Query to be changed
         query = f'SELECT \"y\", \"y_hat\", \"model\", \"timestamp\" ' \
                 f'FROM y_{training_scheme}_{L}_{transformation}_{regression_type};'
         y = pd.read_sql(con=PlotResults.db_connect_y, sql=query, index_col='timestamp')
@@ -408,6 +407,8 @@ class PlotResults:
         commonality = commonality.reset_index().set_index('index')
         commonality = commonality.rename(columns={r'L': '$L_{train}$'})
         pdb.set_trace()
+        commonality.iloc[:, 0] = [f'$\\textit{L.split()[-1].lower()}\$' for L in commonality.iloc[:, 0]]
+
         commonality.index.name = None
         fig_title = 'Commonality for different lookback windows'
         fig = px.line(commonality, y='values', color=r'$L_{train}$', title=fig_title)

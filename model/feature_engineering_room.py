@@ -19,7 +19,7 @@ from data_centre.data import Reader
 #                    ('1W', lambda x:x.resample('7D').mean()), ('SAM', lambda x:x.resample('30D').mean())])
 
 
-# def har_features_puzzle(df: pd.DataFrame, F: typing.Union[str, typing.List[str]], own=True) -> pd.DataFrame:
+# def universal(df: pd.DataFrame, F: typing.Union[str, typing.List[str]], own=True) -> pd.DataFrame:
 #     symbol = df.symbol.unique()[0]
 #     for _, lookback in enumerate(F):
 #         tmp = df['RV']
@@ -74,8 +74,9 @@ class FeatureBuilderBase:
     #Add manually as pd.to_timedelta does not take '1M' as argument
     _5min_buckets_lookback_window_dd['1M'] = pd.to_timedelta('30D') // pd.to_timedelta('5T')
 
-    def __init__(self, name):
+    def __init__(self, name, indiv: bool=True):
         self._name = name
+        self._indv = indiv
 
     @property
     def name(self):
@@ -88,8 +89,8 @@ class FeatureBuilderBase:
 
 class FeatureAR(FeatureBuilderBase):
 
-    def __init__(self):
-        super().__init__('ar')
+    def __init__(self, indiv: bool=True):
+        super().__init__('ar', indiv)
 
     def builder(self, df: pd.DataFrame, symbol: typing.Union[typing.Tuple[str], str],
                 F: typing.List[str] = None) -> pd.DataFrame:

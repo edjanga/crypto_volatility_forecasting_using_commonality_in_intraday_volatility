@@ -1,12 +1,14 @@
 import pdb
 import typing
 import pandas as pd
+import xgboost
 from xgboost import XGBRegressor
 from sklearn.linear_model import LinearRegression, LassoCV, ElasticNetCV, RidgeCV
 from sklearn.decomposition import PCA
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.cluster import KMeans
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, TimeSeriesSplit
+from sklearn.pipeline import make_pipeline
 import os
 from dateutil.relativedelta import relativedelta
 import numpy as np
@@ -270,16 +272,18 @@ class ModelBuilder:
 
     def rolling_metrics(self, training_scheme: str, symbol: str, exog: pd.DataFrame, agg: str,
                         regression_type: str = 'linear', transformation: str = None) -> typing.Tuple[pd.Series]:
+
         factory_regression_dd = \
             {'linear': LinearRegression(),
-             'xgboost': RandomizedSearchCV(estimator=XGBRegressor(objective='reg:squarederror'),
+             'xgboost': RandomizedSearchCV(estimator=XGBRegressor(objective='reg:squarederror',
+                                                                  learning_rate=0.01),
                                            param_distributions=ModelBuilder._params_grid_dd['xgboost']),
-             'elastic': ElasticNetCV(max_iter=5_000), 'lasso': LassoCV(max_iter=5_000), 'ridge': RidgeCV()}
+             'elastic': ElasticNetCV(max_iter=5_000), 'lasso': LassoCV(max_iter=5_000), 'ridge': RidgeCV(),
+             'pcr': PCA()}
         stats_condition = \
             (self._model_type == 'risk_metrics') & (training_scheme == 'SAM') & (regression_type == 'linear')
         stats_condition = not stats_condition
         feature_obj = ModelBuilder._factory_model_type_dd[self._model_type]
-        exog = feature_obj.builder(symbol=exog.columns, df=exog, F=self._F)
         endog = exog.pop(symbol)
         endog.replace(0, np.nan, inplace=True)
         endog.ffill(inplace=True)
@@ -289,19 +293,21 @@ class ModelBuilder:
         split_gen = TimeSeriesSplit(n_splits=round((exog.shape[0] - L_train) // test_size),
                                     max_train_size=L_train, test_size=test_size, gap=0)
         if self._model_type == 'risk_metrics':
-            returns2 = ModelBuilder._factory_transformation_dd[transformation]['transformation'](exog).copy()
-            y_test = ModelBuilder._factory_transformation_dd[transformation]['transformation'](endog.copy())
+            returns2 = exog.copy()
+            endog = ModelBuilder._factory_transformation_dd[transformation]['transformation'](endog.copy())
             if training_scheme == 'SAM':
                 for i, (train_index, test_index) in enumerate(split_gen.split(exog)):
-                    y_hat = \
-                        returns2.iloc[np.hstack((train_index, test_index))].ewm(
-                            alpha=feature_obj.factor).mean().iloc[L_train:, 0]
+                    y_hat = pd.concat([returns2.iloc[train_index, 0],
+                                       pd.Series(data=np.nan, index=returns2.iloc[test_index].index)])
+                    y_hat = y_hat.ewm(alpha=feature_obj.factor).mean().iloc[L_train:]
                     y.append(ModelBuilder._factory_transformation_dd[transformation]['inverse']
-                             (pd.concat([y_test.iloc[test_index], y_hat], axis=1)))
+                             (pd.concat([endog.iloc[test_index], y_hat], axis=1)))
             else:
                 idx_ls = pd.to_datetime(list(exog.groupby(exog.index.date).groups.keys()), utc=True)
-                coefficient = pd.DataFrame(index=idx_ls, columns=['const'] + exog.columns.tolist(), data=np.nan)
                 rres = factory_regression_dd[regression_type]
+                returns2 = pd.concat([returns2.filter(regex=f'{sym}_RET_{self._h}') for sym in returns2.columns])
+                exog = returns2.ewm(alpha=feature_obj.factor).mean().dropna()
+                coefficient = pd.DataFrame(index=idx_ls, columns=['const'] + exog.columns.tolist(), data=np.nan)
                 for i, (train_index, test_index) in enumerate(split_gen.split(exog)):
                     X_train, y_train = exog.iloc[train_index, :], endog.iloc[train_index]
                     X_test, y_test = exog.iloc[test_index, :], endog.iloc[test_index]
@@ -328,28 +334,52 @@ class ModelBuilder:
                 Coefficient, tstats and pvalues dataframes
             """
             rres = factory_regression_dd[regression_type]
-            idx_ls = pd.to_datetime(list(exog.groupby(exog.index.date).groups.keys()), utc=True)
-            coefficient = pd.DataFrame(index=idx_ls, columns=['const']+exog.columns.tolist(), data=np.nan)
+            if regression_type != 'xgboost':
+                idx_ls = pd.to_datetime(list(exog.groupby(exog.index.date).groups.keys()), utc=True)
+                columns_name_dd = {True: [f'PCA_{i + 1}' for i, _ in enumerate(exog.columns)],
+                                   False: exog.columns.tolist()}
+                coefficient = pd.DataFrame(index=idx_ls[1:],
+                                           columns=['const']+columns_name_dd[regression_type == 'pcr'], data=np.nan)
             for _, (train_index, test_index) in enumerate(split_gen.split(exog)):
                 X_train, y_train = exog.iloc[train_index, :], endog.iloc[train_index]
                 X_test, y_test = exog.iloc[test_index, :], endog.iloc[test_index]
+                if isinstance(rres, PCA):
+                    rres_pcr = rres.fit(X_train)
+                    explained_variance_ratio = list(np.cumsum(rres_pcr.explained_variance_ratio_) >= .9)
+                    n_components = explained_variance_ratio.index(True)+1
+                    X_train = pd.DataFrame(rres_pcr.transform(X_train),
+                                           columns=columns_name_dd['pcr' == regression_type],
+                                           index=X_train.index).iloc[:, :n_components]
+                    X_test = pd.DataFrame(rres_pcr.transform(X_test),
+                                          columns=columns_name_dd['pcr' == regression_type],
+                                          index=X_test.index).iloc[:, :n_components]
+                    rres = LinearRegression()
                 rres.fit(X_train, y_train)
                 y_hat = pd.Series(data=rres.predict(X_test), index=y_test.index)
                 y.append(pd.concat([y_test, y_hat], axis=1))
                 """ Coefficients """
-                coefficient.loc[exog.index[test_index[0]], :] = \
-                    np.concatenate((np.array([rres.intercept_]), rres.coef_))
-            """Tstats"""
-            X_train = X_train.assign(const=1)
-            X_train = X_train[coefficient.columns]
-            tstats = pd.DataFrame(data=coefficient.div((np.diag(np.matmul(X_train.values.transpose(),
-                    X_train.values))/np.sqrt(X_train.shape[0]))), index=coefficient.index, columns=coefficient.columns)
-            """Pvalues"""
-            pvalues = pd.DataFrame(data=2 * (1 - t.cdf(tstats, df=X_train.shape[0] - coefficient.shape[1] - 1)),
-                                   index=tstats.index, columns=tstats.columns)
-            tstats.dropna(inplace=True)
-            pvalues.dropna(inplace=True)
-        y = pd.concat(y).dropna()
+                if regression_type != 'xgboost':
+                    daily_coefficient = np.concatenate((np.array([rres.intercept_]), rres.coef_))
+                    coefficient.loc[exog.index[test_index[0]], :len(daily_coefficient)] = daily_coefficient
+            coefficient.fillna(0, inplace=True)
+            # if regression_type != 'xgboost':
+            #     """Tstats"""
+            #     exog = pd.DataFrame(rres_pcr.transform(exog),
+            #                         columns=columns_name_dd[regression_type == 'pcr'],
+            #                         index=exog.index) if 'pcr' == regression_type else exog
+            #     exog = exog.assign(const=1)
+            #     exog = exog[coefficient.columns]
+            #     cov = exog.rolling(window=288, min_periods=288).cov()
+            #     pdb.set_trace()
+            #     tstats = pd.DataFrame(data=coefficient.div((np.diag(np.matmul(exog.values.transpose(),
+            #             X_train.values))/np.sqrt(X_train.shape[0]))), index=coefficient.index,
+            #                           columns=coefficient.columns)
+            #     """Pvalues"""
+            #     pvalues = pd.DataFrame(data=2 * (1 - t.cdf(tstats, df=X_train.shape[0] - coefficient.shape[1] - 1)),
+            #                            index=tstats.index, columns=tstats.columns)
+            #     tstats.dropna(inplace=True)
+            #     pvalues.dropna(inplace=True)
+        y = ModelBuilder._factory_transformation_dd[transformation]['inverse'](pd.concat(y)).dropna()
         y = y.resample(self._s).sum()
         tmp = y.groupby(by=pd.Grouper(level=0, freq=agg))
         mse = tmp.apply(lambda x: mean_squared_error(x.iloc[:, 0], x.iloc[:, -1]))
@@ -364,6 +394,7 @@ class ModelBuilder:
         r2 = r2.assign(metric='r2')
         qlike = pd.melt(pd.DataFrame(qlike), ignore_index=False, value_name='values', var_name='symbol')
         qlike = qlike.assign(metric='qlike')
+        pdb.set_trace()
         if stats_condition:
             coefficient.ffill(inplace=True)
             coefficient.dropna(inplace=True)
@@ -422,7 +453,10 @@ class ModelBuilder:
         con_dd = {'r2': ModelBuilder._db_connect_r2, 'qlike': ModelBuilder._db_connect_qlike,
                   'mse': ModelBuilder._db_connect_mse, 'y': ModelBuilder._db_connect_y}
         table_dd = {'r2': r2, 'qlike': qlike, 'mse': mse, 'y': y}
-        if (self._model_type != 'risk_metrics') & (regression_type in ['linear', 'lasso', 'ridge', 'elastic']):
+        stats_condition = \
+            (self._model_type == 'risk_metrics') & (training_scheme == 'SAM') & (regression_type == 'linear')
+        stats_condition = not stats_condition
+        if stats_condition:
             tstats = ModelBuilder._training_scheme_tstats_dd[training_scheme][symbol]
             pvalues = ModelBuilder._training_scheme_pvalues_dd[training_scheme][symbol]
             coefficient = ModelBuilder._training_scheme_coefficient_dd[training_scheme][symbol]
@@ -431,7 +465,8 @@ class ModelBuilder:
             table_dd.update({'tstats': tstats, 'pvalues': pvalues, 'coefficient': coefficient})
         for table_name, table in table_dd.items():
             table.to_sql(if_exists='append', con=con_dd[table_name], name=f'{table_name}_{self._L}')
-        print(f'[Insertion]: Tables for {training_scheme}_{self._L}_{transformation}_{regression_type}_{symbol}'
+        print(f'[Insertion]: '
+              f'Tables for {training_scheme}_{self._L}_{transformation}_{regression_type}_{self._model_type}_{symbol}'
               f' have been inserted into the database....')
 
     def add_metrics(self, training_scheme: str, regression_type: str = 'linear', transformation: str = None,
@@ -455,7 +490,7 @@ class ModelBuilder:
                     ModelBuilder._kmeans.fit(tmp)
                     silhouette.append(silhouette_score(tmp, ModelBuilder._kmeans.labels_))
                 silhouette = silhouette[1:-1]
-                k_best = silhouette.index(max(silhouette))+2
+                k_best = silhouette.index(max(silhouette))+1
                 ModelBuilder._kmeans.n_clusters = k_best
                 ModelBuilder._kmeans.fit(tmp)
                 tmp.loc[:, 'labels'] = ModelBuilder._kmeans.labels_
@@ -463,9 +498,26 @@ class ModelBuilder:
                 for cluster, members in cluster_group.groups.items():
                     if symbol in members:
                         members_ls = members
-                exog = kwargs['df'].loc[:, members_ls]
+                if self._model_type in ['ar', 'har', 'har_mkt', 'risk_metrics']:
+                    exog = \
+                        ModelBuilder._factory_model_type_dd[self._model_type].builder(F=self._F, df=kwargs['df'],
+                                                                                      symbol=members_ls)
+                elif self._model_type in ['har_cdr', 'har_csr']:
+                    exog = \
+                        ModelBuilder._factory_model_type_dd[self._model_type].builder(F=self._F, df=kwargs['df'],
+                                                                                      df2=kwargs['df2'],
+                                                                                      symbol=members_ls)
             elif training_scheme == 'CAM':
-                exog = kwargs['df']
+                if self._model_type in ['ar', 'har', 'har_mkt', 'risk_metrics']:
+                    exog = \
+                        ModelBuilder._factory_model_type_dd[self._model_type].builder(F=self._F, df=kwargs['df'],
+                                                                                      symbol=kwargs['df'].columns)
+                elif self._model_type in ['har_cdr', 'har_csr']:
+                    exog = \
+                        ModelBuilder._factory_model_type_dd[self._model_type].builder(F=self._F, df=kwargs['df'],
+                                                                                      df2=kwargs['df2'],
+                                                                                      symbol=kwargs['df'].columns)
+            exog = ModelBuilder._factory_transformation_dd[transformation]['transformation'](exog)
             self.add_metrics_per_symbol(symbol, training_scheme, exog, kwargs['agg'], regression_type,
                                         transformation)
 
