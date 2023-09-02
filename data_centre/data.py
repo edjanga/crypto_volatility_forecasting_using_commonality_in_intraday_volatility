@@ -11,37 +11,39 @@ class Reader:
 
     _min_max_scaler = MinMaxScaler()
 
-    def __init__(self, file: typing.Union[typing.List[str], str] = os.path.abspath('./data_centre/tmp/aggregate2022')):
-        self._directory = file
+    def __init__(self, directory: str = './tmp'):
+        self._directory = directory
+        """Filter based on volume"""
+        self._df = \
+            pd.concat([pd.read_parquet(f'{self._directory}/aggregate{str(year)}') for year in [2021, 2022, 2023]])
+        symbol = self._df.isnull().sum()
+        symbol.sort_values(inplace=True)
+        symbol = symbol.iloc[:-4].index.tolist()
+        self._df = self._df[symbol]
+        self._df.index = pd.to_datetime(self._df.index)
+        self._df.ffill(inplace=True)
 
     def prices_read(self, symbol: typing.Union[str, typing.List[str]] = None) -> pd.DataFrame:
-        prices = pd.read_parquet(os.path.abspath(self._directory)).set_index('timestamp')
-        prices.index = pd.to_datetime(prices.index)
-        prices = prices.groupby(by='symbol', group_keys=True).apply(lambda x: x[['askPx', 'bidPx']].mean(axis=1))
-        prices = prices.transpose().drop('BUSDUSDT', axis=1)
+        prices = self._df
         if symbol:
             if isinstance(symbol, str):
                 symbol = [symbol]
             prices = prices[symbol]
         return prices
+
     def volumes_read(self) -> pd.DataFrame:
-        volumes = pd.read_parquet(os.path.abspath(self._directory)).set_index('timestamp')
-        volumes.index = pd.to_datetime(volumes.index)
-        volumes = volumes.groupby(by='symbol', group_keys=True).apply(lambda x: x[['askQty', 'bidQty']].mean(axis=1))
-        volumes = volumes.transpose().drop('BUSDUSDT', axis=1)
+        volumes = pd.concat([pd.read_parquet(f'{self._directory}/aggregate{str(year)}_volume')
+                             for year in [2021, 2022, 2023]])
+        volumes = volumes[self._df.columns]
         return volumes
 
     def returns_read(self, cutoff_low: float = .01, cutoff_high: float = .01, raw: bool=False,
                      resampled: bool=True, symbol: typing.Union[typing.List[str], str]=None) -> pd.DataFrame:
-        returns_df = pd.read_parquet(os.path.abspath(self._directory), columns=['timestamp', 'pret_1m', 'symbol'])
-        returns_df = pd.pivot(index='timestamp', columns='symbol', values='pret_1m', data=returns_df)
+        returns_df = np.log(self._df.div(self._df.shift()))
         if symbol:
             if isinstance(symbol, str):
                 symbol = [symbol]
             returns_df = returns_df[symbol]
-        else:
-            returns_df.drop('BUSDUSDT', axis=1, inplace=True)
-        returns_df.index = pd.to_datetime(returns_df.index)
         returns_df.dropna(inplace=True)
         """Winsorise returns"""
         if not raw:
@@ -58,11 +60,15 @@ class Reader:
         rv_df = \
             self.returns_read(cutoff_low=cutoff_low, cutoff_high=cutoff_high,
                               raw=raw, resampled=False, symbol=symbol)**2
+        rv_df.replace(0, np.nan, inplace=True)
+        rv_df.ffill(inplace=True)
         rv_df = rv_df.resample('5T').sum() if variance else rv_df.resample('5T').sum()**.5
+        rv_df.replace(0, np.nan, inplace=True)
+        rv_df.ffill(inplace=True)
         return rv_df
 
     def cdr_read(self, cutoff_low: float = .0001, cutoff_high: float = .0001) -> pd.DataFrame:
-        cdr_df = pd.read_parquet(os.path.abspath(self._directory),
+        cdr_df = pd.read_parquet(os.path.abspath(self._file),
                                  columns=['timestamp', 'volBuyQty', 'volSellQty', 'symbol'])
         cdr_df = cdr_df.set_index((['timestamp', 'symbol']))
         cdr_df = cdr_df.assign(volume=cdr_df.sum(axis=1))
@@ -77,7 +83,7 @@ class Reader:
                  cutoff_low: float = .0001, cutoff_high: float = .0001) -> pd.DataFrame:
         if feature_range:
             Reader._min_max_scaler.feature_range = feature_range
-        csr_df = pd.read_parquet(os.path.abspath(self._directory),
+        csr_df = pd.read_parquet(os.path.abspath(self._file),
                                  columns=['timestamp', 'bidPx', 'askPx', 'symbol'])
         csr_df = csr_df.set_index((['timestamp', 'symbol']))
         csr_df = csr_df.assign(px=csr_df.mean(axis=1))
@@ -106,6 +112,7 @@ class Reader:
 
 
 if __name__ == '__main__':
-    reader_obj = Reader(file=os.path.abspath('./tmp/aggregate2022'))
-    prices = reader_obj.prices_read(symbol=['BTCUSDT', 'ETHUSDT'])
+    reader_obj = Reader(directory='./tmp')
+    #prices = reader_obj.prices_read(symbol=['BTCUSDT', 'ETHUSDT'])
+    reader_obj.volumes_read()
     pdb.set_trace()

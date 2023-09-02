@@ -30,7 +30,7 @@ import plotly.io as pio
 pio.kaleido.scope.mathjax = None
 class EDA:
 
-    reader_object = Reader()
+    reader_object = Reader(directory=os.path.abspath('./data_centre/tmp'))
     rv = reader_object.rv_read()
     returns = reader_object.returns_read()
 
@@ -48,7 +48,7 @@ class EDA:
         fig = make_subplots(rows=1, cols=1)
         fig.add_traces(data=go.Bar(x=list(range(2, len(silhouette) + 2)), y=silhouette, showlegend=False))
         fig.add_traces(data=go.Scatter(name='k', x=list(range(2, len(silhouette) + 2)),
-                                       marker=dict(size=15), y=silhouette, showlegend=False))
+                                       mode='lines+markers', marker=dict(size=15), y=silhouette, showlegend=False))
         fig.update_xaxes(title='Number of clusters')
         fig.update_yaxes(title='Silhouette score')
         fig.update_layout(title='Optimal number of clusters: Analysis')
@@ -57,13 +57,12 @@ class EDA:
 
     def daily_rv(self) -> None:
         daily_rv_df = pd.DataFrame()
-        tmp_df = self.rv.resample('1D').sum()
+        tmp_df = np.log(self.rv.resample('1D').sum())
         daily_rv_df = daily_rv_df.assign(cross_average=tmp_df.mean(axis=1),
                                          percentile05=tmp_df.transpose().quantile(.05),
                                          percentile95=tmp_df.transpose().quantile(.95),
                                          percentile25=tmp_df.transpose().quantile(.25),
                                          percentile75=tmp_df.transpose().quantile(.75))
-        daily_rv_df = np.log(daily_rv_df)
         daily_rv_df.ffill(inplace=True)
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=daily_rv_df.index, y=daily_rv_df.percentile95, fill=None, mode='lines',
@@ -84,7 +83,9 @@ class EDA:
         fig.write_image(os.path.abspath('./plots/daily_rv.pdf'))
 
     def intraday_rv(self) -> None:
-        rv_df = self.rv.resample('30T').sum()
+        rv_df = np.log(self.rv.resample('30T').sum())
+        rv_df.replace(-np.inf, np.nan, inplace=True)
+        rv_df.ffill(inplace=True)
         mean_group = rv_df.mean(axis=1).groupby(by=[rv_df.index.hour, rv_df.index.minute])
         diurnal_rv_df = pd.DataFrame()
         diurnal_rv_df = \
@@ -97,7 +98,7 @@ class EDA:
         diurnal_rv_df.index = [idx.strftime('%H:%M') for idx in diurnal_rv_df.index]
         hours_ls = list(diurnal_rv_df.index)
         diurnal_rv_df.ffill(inplace=True)
-        diurnal_rv_df = np.log(diurnal_rv_df)
+        #diurnal_rv_df = np.log(diurnal_rv_df)
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=diurnal_rv_df.index, y=diurnal_rv_df.percentile95, fill=None, mode='lines',
                                  line_color='orange', line={'width': 1, 'dash': 'dash'}, showlegend=False))
@@ -172,19 +173,21 @@ class EDA:
     def boxplot(self):
 
         fig = make_subplots(rows=2, cols=1, row_titles=['Raw RV', 'RV'],
-                            column_titles=['Raw and processed RV: Boxplot.'])
+                            column_titles=['Raw and processed RV: Boxplot.'],
+                            shared_xaxes=True)
         raw_rv = EDA.reader_object.rv_read(raw=True)
         raw_rv.index.name = 'Time'
         raw_rv = pd.melt(raw_rv.reset_index(), var_name='symbol', value_name='values', id_vars='Time')
         tmp_rv = np.log(self.rv.copy())
         tmp_rv.index.name = 'Time'
         tmp_rv = pd.melt(tmp_rv.reset_index(), var_name='symbol', value_name='values', id_vars='Time')
-        for symbol in tmp_rv.symbol.unique().tolist():
+        for symbol in tmp_rv.symbol.unique().tolist()[:20]:
             fig.add_trace(go.Box(y=raw_rv.query(f'symbol == \"{symbol}\"')['values'].tolist(),
                                  name=symbol), row=1, col=1)
             fig.add_trace(go.Box(y=tmp_rv.query(f'symbol == \"{symbol}\"')['values'].tolist(),
                                  name=symbol), row=2, col=1)
-        fig.write_image(os.path.abspath('./plots/boxplot.pdf'))
+        fig.update_layout(showlegend=False)
+        fig.write_image(os.path.abspath('./plots/boxplot.png'))
 
 
 
@@ -405,13 +408,11 @@ class PlotResults:
         commonality_group = commonality.groupby(by='L', group_keys=True)
         commonality = commonality_group.apply(lambda x: x.resample('1M').mean()).iloc[:-1, :]
         commonality = commonality.reset_index().set_index('index')
-        commonality = commonality.rename(columns={r'L': '$L_{train}$'})
-        pdb.set_trace()
-        commonality.iloc[:, 0] = [f'$\\textit{L.split()[-1].lower()}\$' for L in commonality.iloc[:, 0]]
-
+        commonality = commonality.rename(columns={'L': 'L_train'})
+        commonality.iloc[:, 0] = [f'{L.lower()}' for L in commonality.iloc[:, 0]]
         commonality.index.name = None
-        fig_title = 'Commonality for different lookback windows'
-        fig = px.line(commonality, y='values', color=r'$L_{train}$', title=fig_title)
+        fig_title = r'Commonality for different lookback windows'
+        fig = px.line(commonality, y='values', color='L_train', title=fig_title)
         fig.update_layout({'xaxis_title': '', 'yaxis_title': 'Commonality'})
         if save:
             fig.write_image(os.path.abspath(f'./plots/commonality.pdf'))

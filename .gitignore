@@ -22,3 +22,5 @@ plots/*.png
 minutelyTARDIS.sh
 data_centre/*tardis*
 data_centre/prices_sample
+test*.py
+LightGBM

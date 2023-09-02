@@ -1,14 +1,15 @@
 import pdb
 import typing
 import pandas as pd
-import xgboost
 from xgboost import XGBRegressor
+#import lightgbm
+from lightgbm import LGBMRegressor
+import xgboost as xgb
 from sklearn.linear_model import LinearRegression, LassoCV, ElasticNetCV, RidgeCV
 from sklearn.decomposition import PCA
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.cluster import KMeans
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, TimeSeriesSplit
-from sklearn.pipeline import make_pipeline
 import os
 from dateutil.relativedelta import relativedelta
 import numpy as np
@@ -21,7 +22,7 @@ from scipy.stats import t
 import sqlite3
 from sklearn.metrics import silhouette_score
 from model.feature_engineering_room import FeatureAR, FeatureRiskMetricsEstimator, FeatureHAR,\
-    FeatureHARMkt, FeatureHARCDR, FeatureHARCSR
+    FeatureHARMkt, FeatureHARCDR, FeatureHARCSR, FeatureUniversal
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 import threading
@@ -31,7 +32,11 @@ from datetime import datetime
 from sklearn import metrics
 import warnings
 import matplotlib.pyplot as plt
-
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision import datasets, transforms
+from torch.utils.data import DataLoader
 
 """Functions used to facilitate computation within classes."""
 qlike_score = lambda x: ((x.iloc[:, 0].div(x.iloc[:, -1]))-np.log(x.iloc[:, 0].div(x.iloc[:, -1]))-1).mean()
@@ -44,12 +49,54 @@ def flatten(ls: list()) -> list:
         return flat_ls
 
 
+class EntityEmbedding(nn.Module):
+
+    results_dd = dict()
+
+    def __init__(self, input_size, hidden_size, output_size):
+        super(EntityEmbedding, self).__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ReLU(),
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(hidden_size, output_size),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        encoded = self.encoder(x)
+        decoded = self.decoder(encoded)
+        return decoded
+
+    def plot_dim_vs_loss(self):
+        data = pd.DataFrame(index=EntityEmbedding.results_dd.keys(),
+                            data=EntityEmbedding.results_dd.values(), columns=['Loss'])
+        fig = make_subplots(rows=1, cols=1)
+        fig.add_traces(data=go.Bar(x=data.index, y=data.values.reshape(1, -1)[0], showlegend=False))
+        fig.add_traces(data=go.Scatter(name='dim', x=data.index, mode='lines+markers', marker=dict(size=15),
+                                       y=data.values.reshape(1, -1)[0], showlegend=False))
+        fig.update_xaxes(title='Entity embedding dimension')
+        fig.update_yaxes(title='Loss function')
+        fig.update_layout(title='Value of loss function - Entity embedding dimension')
+        # fig.write_image(os.path.abspath('./plots/dim_embedding.pdf'))
+        print(f'[Plots]: Selection optimal embedding dimension plot has been generated.')
+        fig.show()
+
+    def dim_embedding(self):
+        data = pd.DataFrame(index=EntityEmbedding.results_dd.keys(),
+                            data=EntityEmbedding.results_dd.values(), columns=['Loss'])
+        threshold = data['Loss'].median()
+        data = data.query(f'Loss <= {threshold}')
+        return min(data.index)
+
+
 class ModelBuilder:
     _filter_dd = {'har': lambda x: f'{x}_', 'har_mkt': lambda x: f'{x}_|session',
                   'har_cdr': lambda x: f'{x}_|{x}_CDR', 'har_csr': lambda x: f'{x}_|{x}_CSR_',
                   'risk_metrics': lambda x: f'{x}_|{x}_RET', 'ar': lambda x: f'{x}_'}
     _transformation_dd = {None: 'level', 'log': 'log'}
-    _training_schemes = ['SAM', 'ClustAM', 'CAM']
+    _training_schemes = ['SAM', 'ClustAM', 'CAM', 'UAM']
     _factory_model_type_dd = {'ar': FeatureAR(), 'risk_metrics': FeatureRiskMetricsEstimator(), 'har': FeatureHAR(),
                               'har_mkt': FeatureHARMkt(), 'har_cdr': FeatureHARCDR(),
                               'har_csr': FeatureHARCSR()}
@@ -57,14 +104,15 @@ class ModelBuilder:
                                    'lambda': np.linspace(0.1, 1, 10).tolist(),
                                    'max_depth': [int(depth) for depth in np.linspace(1, 6, 6).tolist()],
                                    'eta': np.linspace(0.1, 1, 10).tolist()},
-                       'elastic': {'alpha': np.linspace(0.1, 1, 10).tolist(),
-                                   'l1_ratio': np.linspace(0.25, .75, 3).tolist()},
-                       'lasso': {'alphas': np.linspace(0.1, 1, 10).tolist},
-                       'ridge': {'alpha': np.linspace(0.1, 1, 10).tolist()}}
-    _pca_obj = PCA()
+                       'lightgbm': {'n_estimators': [100, 500, 1_000],
+                                    #'objective': ['regression'],
+                                    'num_leaves': [int(leaf) for leaf in np.linspace(10, 50, 5).tolist()],
+                                    'learning_rate': np.linspace(.01, .1, 10).tolist(),
+                                    'max_depth': [int(depth) for depth in np.linspace(1, 6, 6).tolist()]}
+                       }
     _factory_transformation_dd = {'log': {'transformation': np.log, 'inverse': np.exp},
                                   None: {'transformation': lambda x: x, 'inverse': lambda x: x}}
-    models = [None, 'ar', 'risk_metrics', 'har', 'har_mkt', 'har_cdr', 'har_csr', 'har_universal']
+    models = [None, 'ar', 'risk_metrics', 'har', 'har_mkt', 'har_cdr', 'har_csr']
     models_rolling_metrics_dd = {model: dict([('qlike', {}), ('r2', {}), ('mse', {}),
                                               ('tstats', {}), ('pvalues', {}), ('coefficient', {})])
                                  for _, model in enumerate(models) if model}
@@ -86,8 +134,8 @@ class ModelBuilder:
     #                                          check_same_thread=False)
     # db_connect_outliers = sqlite3.connect(database=os.path.abspath('./data_centre/databases/outliers.db'),
     #                                       check_same_thread=False)
-    # db_connect_pca = sqlite3.connect(database=os.path.abspath('./data_centre/databases/pca.db'),
-    #                                  check_same_thread=False)
+    _db_connect_pca = sqlite3.connect(database=os.path.abspath('./data_centre/databases/pca.db'),
+                                     check_same_thread=False)
     _db_connect_tstats = sqlite3.connect(database=os.path.abspath('./data_centre/databases/tstats.db'),
                                          check_same_thread=False)
     _db_connect_pvalues = sqlite3.connect(database=os.path.abspath('./data_centre/databases/pvalues.db'),
@@ -118,7 +166,7 @@ class ModelBuilder:
                   '1M': pd.to_timedelta('30D') // pd.to_timedelta('5T')}
     _cluster_dd = dict()
     start_dd = {'1D': relativedelta(days=1), '1W': relativedelta(weeks=1), '1M': relativedelta(months=1)}
-    reader_obj = Reader(file='./data_centre/tmp/aggregate2022')
+    reader_obj = Reader(directory=os.path.abspath('./data_centre/tmp'))
 
     def __init__(self, h: str, F: typing.List[str], L: str, Q: str, model_type: str=None, s=None, b: str='5T'):
         """
@@ -251,7 +299,7 @@ class ModelBuilder:
         covariance_dd = dict()
         reader_obj = Reader(file=os.path.abspath('../data_centre/tmp/aggregate2022'))
         returns = reader_obj.returns_read(raw=False, cutoff_low=cutoff_low, cutoff_high=cutoff_high)
-        for L in ['1D', '1W', 'SAM']:
+        for L in ['1D', '1W', '1M']:
             window = pd.to_timedelta('30D') // pd.to_timedelta('5T') if L == 'SAM' \
                 else max(4, pd.to_timedelta(L) // pd.to_timedelta('5T'))
             covariance = \
@@ -275,13 +323,17 @@ class ModelBuilder:
 
         factory_regression_dd = \
             {'linear': LinearRegression(),
-             'xgboost': RandomizedSearchCV(estimator=XGBRegressor(objective='reg:squarederror',
-                                                                  learning_rate=0.01),
-                                           param_distributions=ModelBuilder._params_grid_dd['xgboost']),
-             'elastic': ElasticNetCV(max_iter=5_000), 'lasso': LassoCV(max_iter=5_000), 'ridge': RidgeCV(),
+             'lightgbm': RandomizedSearchCV(estimator=LGBMRegressor(objective='regression', early_stopping_rounds=50),
+                                            param_distributions=ModelBuilder._params_grid_dd['lightgbm'],
+                                            verbose=3, n_jobs=-1),
+             'elastic': ElasticNetCV(max_iter=5_000, alphas=np.linspace(0.1, 1, 10),
+                                     l1_ratio=np.linspace(0.25, 1, 4).tolist(), n_jobs=-1),
+             'lasso': LassoCV(max_iter=5_000, alphas=np.linspace(0.1, 1, 10), n_jobs=-1),
+             'ridge': RidgeCV(alphas=np.linspace(.1, 1, 10)),
              'pcr': PCA()}
         stats_condition = \
-            (self._model_type == 'risk_metrics') & (training_scheme == 'SAM') & (regression_type == 'linear')
+            ((self._model_type == 'risk_metrics') & (training_scheme == 'SAM') &
+             (regression_type == 'linear')) | (regression_type != 'xgboost')
         stats_condition = not stats_condition
         feature_obj = ModelBuilder._factory_model_type_dd[self._model_type]
         endog = exog.pop(symbol)
@@ -294,14 +346,12 @@ class ModelBuilder:
                                     max_train_size=L_train, test_size=test_size, gap=0)
         if self._model_type == 'risk_metrics':
             returns2 = exog.copy()
-            endog = ModelBuilder._factory_transformation_dd[transformation]['transformation'](endog.copy())
             if training_scheme == 'SAM':
                 for i, (train_index, test_index) in enumerate(split_gen.split(exog)):
                     y_hat = pd.concat([returns2.iloc[train_index, 0],
                                        pd.Series(data=np.nan, index=returns2.iloc[test_index].index)])
                     y_hat = y_hat.ewm(alpha=feature_obj.factor).mean().iloc[L_train:]
-                    y.append(ModelBuilder._factory_transformation_dd[transformation]['inverse']
-                             (pd.concat([endog.iloc[test_index], y_hat], axis=1)))
+                    y.append(pd.concat([endog.iloc[test_index], y_hat], axis=1))
             else:
                 idx_ls = pd.to_datetime(list(exog.groupby(exog.index.date).groups.keys()), utc=True)
                 rres = factory_regression_dd[regression_type]
@@ -333,18 +383,24 @@ class ModelBuilder:
             """
                 Coefficient, tstats and pvalues dataframes
             """
-            rres = factory_regression_dd[regression_type]
+            if regression_type != 'pcr':
+                rres = factory_regression_dd[regression_type]
+            else:
+                rres_pcr = factory_regression_dd[regression_type]
+                rres = LinearRegression()
             if regression_type != 'xgboost':
                 idx_ls = pd.to_datetime(list(exog.groupby(exog.index.date).groups.keys()), utc=True)
                 columns_name_dd = {True: [f'PCA_{i + 1}' for i, _ in enumerate(exog.columns)],
                                    False: exog.columns.tolist()}
                 coefficient = pd.DataFrame(index=idx_ls[1:],
                                            columns=['const']+columns_name_dd[regression_type == 'pcr'], data=np.nan)
-            for _, (train_index, test_index) in enumerate(split_gen.split(exog)):
+                tstats = coefficient.copy()
+                pvalues = coefficient.copy()
+            for i, (train_index, test_index) in enumerate(split_gen.split(exog)):
                 X_train, y_train = exog.iloc[train_index, :], endog.iloc[train_index]
                 X_test, y_test = exog.iloc[test_index, :], endog.iloc[test_index]
-                if isinstance(rres, PCA):
-                    rres_pcr = rres.fit(X_train)
+                if regression_type == 'pcr':
+                    rres_pcr.fit(X_train)
                     explained_variance_ratio = list(np.cumsum(rres_pcr.explained_variance_ratio_) >= .9)
                     n_components = explained_variance_ratio.index(True)+1
                     X_train = pd.DataFrame(rres_pcr.transform(X_train),
@@ -353,38 +409,35 @@ class ModelBuilder:
                     X_test = pd.DataFrame(rres_pcr.transform(X_test),
                                           columns=columns_name_dd['pcr' == regression_type],
                                           index=X_test.index).iloc[:, :n_components]
-                    rres = LinearRegression()
                 rres.fit(X_train, y_train)
                 y_hat = pd.Series(data=rres.predict(X_test), index=y_test.index)
                 y.append(pd.concat([y_test, y_hat], axis=1))
                 """ Coefficients """
-                if regression_type != 'xgboost':
+                if regression_type not in ['lightgbm', 'lstm', 'lstm_transformers']:
                     daily_coefficient = np.concatenate((np.array([rres.intercept_]), rres.coef_))
                     coefficient.loc[exog.index[test_index[0]], :len(daily_coefficient)] = daily_coefficient
-            coefficient.fillna(0, inplace=True)
-            # if regression_type != 'xgboost':
-            #     """Tstats"""
-            #     exog = pd.DataFrame(rres_pcr.transform(exog),
-            #                         columns=columns_name_dd[regression_type == 'pcr'],
-            #                         index=exog.index) if 'pcr' == regression_type else exog
-            #     exog = exog.assign(const=1)
-            #     exog = exog[coefficient.columns]
-            #     cov = exog.rolling(window=288, min_periods=288).cov()
-            #     pdb.set_trace()
-            #     tstats = pd.DataFrame(data=coefficient.div((np.diag(np.matmul(exog.values.transpose(),
-            #             X_train.values))/np.sqrt(X_train.shape[0]))), index=coefficient.index,
-            #                           columns=coefficient.columns)
-            #     """Pvalues"""
-            #     pvalues = pd.DataFrame(data=2 * (1 - t.cdf(tstats, df=X_train.shape[0] - coefficient.shape[1] - 1)),
-            #                            index=tstats.index, columns=tstats.columns)
-            #     tstats.dropna(inplace=True)
-            #     pvalues.dropna(inplace=True)
+                    coefficient.loc[exog.index[test_index[0]], :].fillna(0, inplace=True)
+                    columns_ls = list(set(X_train.columns).intersection(set(coefficient.columns)))
+                    columns_ls.sort()
+                    X_train = X_train.assign(const=1)
+                    X_train = X_train[['const']+columns_ls]
+                    XtX = np.dot(X_train.transpose().values, X_train.values)
+                    std_err = np.zeros(coefficient.shape[1])
+                    std_err[:X_train.shape[1]] = np.diag(XtX) ** (.5) / np.sqrt(X_train.shape[0])
+                    tstats.loc[exog.index[test_index[0]], :] = \
+                        coefficient.loc[exog.index[test_index[0]], :].div(std_err)
+                    pvalues.loc[exog.index[test_index[0]], :] = 2 * t.pdf(tstats.loc[exog.index[test_index[0]], :],
+                                                                          df=L_train-1)
         y = ModelBuilder._factory_transformation_dd[transformation]['inverse'](pd.concat(y)).dropna()
         y = y.resample(self._s).sum()
         tmp = y.groupby(by=pd.Grouper(level=0, freq=agg))
         mse = tmp.apply(lambda x: mean_squared_error(x.iloc[:, 0], x.iloc[:, -1]))
         qlike = tmp.apply(qlike_score)
         r2 = tmp.apply(lambda x: r2_score(x.iloc[:, 0], x.iloc[:, -1]))
+        print((symbol, r2.min(), r2.max()))
+        r2 = tmp.apply(lambda x: sum((x.iloc[:, 0]-x.iloc[:, -1])**2)/sum(x.iloc[:, 0]**2))
+        print((symbol, r2.min(), r2.max()))
+        pdb.set_trace()
         mse = pd.Series(mse, name=symbol)
         qlike = pd.Series(qlike, name=symbol)
         r2 = pd.Series(r2, name=symbol)
@@ -394,7 +447,6 @@ class ModelBuilder:
         r2 = r2.assign(metric='r2')
         qlike = pd.melt(pd.DataFrame(qlike), ignore_index=False, value_name='values', var_name='symbol')
         qlike = qlike.assign(metric='qlike')
-        pdb.set_trace()
         if stats_condition:
             coefficient.ffill(inplace=True)
             coefficient.dropna(inplace=True)
@@ -463,15 +515,184 @@ class ModelBuilder:
             con_dd.update({'tstats': ModelBuilder._db_connect_tstats, 'pvalues': ModelBuilder._db_connect_pvalues,
                            'coefficient': ModelBuilder._db_connect_coefficient})
             table_dd.update({'tstats': tstats, 'pvalues': pvalues, 'coefficient': coefficient})
+        count = 1
         for table_name, table in table_dd.items():
-            table.to_sql(if_exists='append', con=con_dd[table_name], name=f'{table_name}_{self._L}')
-        print(f'[Insertion]: '
-              f'Tables for {training_scheme}_{self._L}_{transformation}_{regression_type}_{self._model_type}_{symbol}'
-              f' have been inserted into the database....')
+            if table_name not in ['tstats', 'pvalues', 'coefficient']:
+                table.to_sql(if_exists='append', con=con_dd[table_name], name=f'{table_name}_{self._L}')
+            print(f'[Insertion]: '
+                  f'Tables for '
+                  f'{training_scheme}_{self._L}_{transformation}_{regression_type}_{self._model_type}_{symbol}'
+                  f' have been inserted into the database ({count})....')
+            count += 1
+
+    def add_metrics_universal(self, exog: pd.DataFrame, agg: str, regression_type: str = 'lstm',
+                              transformation: str = None):
+        """
+            Entity embedding
+        """
+        # Hyperparameters
+        np.random.seed(123)
+        one_hot_encoding_train = exog.filter(regex='is_').loc['2021-01-01', :].copy()
+        one_hot_encoding_test = exog.filter(regex='is_').loc['2021-01-02', :].copy()
+        input_size = exog.filter(regex='is_').shape[1]
+        hidden_size = exog.filter(regex='is_').shape[1] - 1
+        output_size = input_size
+        batch_size = 1
+        num_epochs = 10
+        learning_rate = 0.001
+        patience = 10
+        one_hot_encoding_train = \
+            one_hot_encoding_train.values.reshape(one_hot_encoding_train.shape[1],
+                                                  one_hot_encoding_train.shape[0] // one_hot_encoding_train.shape[1],
+                                                  one_hot_encoding_train.shape[1])
+        one_hot_encoding_test = \
+            one_hot_encoding_test.values.reshape(one_hot_encoding_test.shape[1],
+                                                 one_hot_encoding_test.shape[0] // one_hot_encoding_test.shape[1],
+                                                 one_hot_encoding_test.shape[1])
+        one_hot_encoding_train = torch.tensor(one_hot_encoding_train, dtype=torch.float32)
+        one_hot_encoding_test = torch.tensor(one_hot_encoding_test, dtype=torch.float32)
+        train_loader = DataLoader(one_hot_encoding_train, batch_size=batch_size, shuffle=False)
+        val_loader = DataLoader(one_hot_encoding_test, batch_size=batch_size, shuffle=False)
+        criterion = nn.BCELoss()
+        results_dd = dict()
+        for hidden_size in range(one_hot_encoding_train.shape[0] - 1, 1, -1):
+            print(f'Test Autocencoder with {hidden_size} large hidden layer.')
+            entityemb = EntityEmbedding(input_size, hidden_size, output_size)
+            optimizer = optim.Adam(entityemb.parameters(), lr=learning_rate)
+            best_val_loss = float('inf')
+            no_improvement_count = 0
+            # Training loop
+            for epoch in range(num_epochs):
+                for _, data in enumerate(train_loader):
+                    inputs = data
+                    optimizer.zero_grad()
+                    outputs = entityemb(inputs)
+                    loss = criterion(outputs, inputs)
+                    loss.backward()
+                    optimizer.step()
+                    # Validation
+                    entityemb.eval()
+                    val_loss = 0.0
+                    with torch.no_grad():
+                        for _, data in enumerate(val_loader):
+                            inputs = data
+                            outputs = entityemb(inputs)
+                            val_loss += criterion(outputs, inputs).item()
+                    val_loss /= len(val_loader)
+
+                print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
+
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    no_improvement_count = 0
+                else:
+                    no_improvement_count += 1
+
+                if no_improvement_count >= patience:
+                    results_dd[hidden_size] = best_val_loss
+                    print(f'Early stopping at epoch {epoch + 1}')
+                    break
+            entityemb.results_dd[hidden_size] = best_val_loss
+        data = pd.DataFrame(index=EntityEmbedding.results_dd.keys(),
+                            data=EntityEmbedding.results_dd.values(), columns=['Loss'])
+        threshold = data['Loss'].quantile(.5)
+        data = data.query(f'Loss <= {threshold}')
+        dim = min(data.index)
+        entity_emb = EntityEmbedding(input_size, dim, output_size)
+        optimizer = optim.Adam(entity_emb.parameters(), lr=learning_rate)
+        best_val_loss = float('inf')
+        no_improvement_count = 0
+        # Training loop
+        for epoch in range(num_epochs):
+            for _, data in enumerate(train_loader):
+                inputs = data
+                optimizer.zero_grad()
+                outputs = entity_emb(inputs)
+                loss = criterion(outputs, inputs)
+                loss.backward()
+                optimizer.step()
+                # Validation
+                entity_emb.eval()
+                val_loss = 0.0
+                with torch.no_grad():
+                    for _, data in enumerate(val_loader):
+                        inputs = data
+                        outputs = entity_emb(inputs)
+                        val_loss += criterion(outputs, inputs).item()
+                val_loss /= len(val_loader)
+
+            print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
+
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                no_improvement_count = 0
+            else:
+                no_improvement_count += 1
+
+            if no_improvement_count >= patience:
+                results_dd[hidden_size] = best_val_loss
+                print(f'Early stopping at epoch {epoch + 1}')
+                break
+        # entity_encoded = entity_emb.encoder(one_hot_encoding_test)
+        # idx_ls = exog.index[:entity_encoded.shape[1]].tolist() * entity_encoded.shape[0]
+        # entity_encoded = torch.reshape(entity_encoded,
+        #                                (entity_encoded.shape[0]*entity_encoded.shape[1],
+        #                                 entity_encoded.shape[-1]))
+        # entity_encoded = pd.DataFrame(torch.detach(entity_encoded).numpy(), index=idx_ls,
+        #                               columns=['_'.join(('Embedding', str(i))) for i in range(1, dim+1)])
+        endog = exog.pop('RV')
+        y = list()
+        dates = list(np.unique(exog.index.date))
+        days = pd.to_timedelta(self._L) // pd.to_timedelta('1D')
+        start = dates[0]+relativedelta(days=days)
+        for date in dates[dates.index(start):]:
+            X_train, y_train = \
+                exog.loc[(exog.index.date >= date-relativedelta(days=days)) & (exog.index.date < date), :],\
+                endog.loc[(endog.index.date >= date-relativedelta(days=days)) & (endog.index.date < date)]
+            one_hot_encoding_train = X_train.filter(regex='is_').copy()
+            X_train.drop(one_hot_encoding_train.columns, axis=1, inplace=True)
+            one_hot_encoding_train = \
+                one_hot_encoding_train.values.reshape(one_hot_encoding_train.shape[1],
+                                                    one_hot_encoding_train.shape[0] // one_hot_encoding_train.shape[1],
+                                                      one_hot_encoding_train.shape[1])
+            one_hot_encoding_train = torch.tensor(one_hot_encoding_train, dtype=torch.float32)
+            entity_encoded = entity_emb.encoder(one_hot_encoding_train)
+            entity_encoded = torch.reshape(entity_encoded,
+                                           (entity_encoded.shape[0] * entity_encoded.shape[1],
+                                            entity_encoded.shape[-1]))
+            entity_encoded = pd.DataFrame(torch.detach(entity_encoded).numpy(), index=X_train.index,
+                                          columns=['_'.join(('Embedding', str(i))) for i in range(1, dim + 1)])
+            X_train = pd.concat([X_train, entity_encoded], axis=1)
+            X_train = X_train.values.reshape(one_hot_encoding_train.shape[0],
+                                             one_hot_encoding_train.shape[1],
+                                             X_train.shape[1])
+            """Train LSTM and LSTM + transformers"""
+            pdb.set_trace()
+            """Prediction"""
+            X_test, y_test = exog.loc[exog.index.date == date, :], endog.loc[exog.index.date == date]
+            one_hot_encoding_test = X_test.filter(regex='is_').copy()
+            X_test.drop(one_hot_encoding_test.columns, axis=1, inplace=True)
+            one_hot_encoding_test = \
+                one_hot_encoding_test.values.reshape(one_hot_encoding_test.shape[1],
+                                                     one_hot_encoding_test.shape[0] // one_hot_encoding_test.shape[1],
+                                                     one_hot_encoding_test.shape[1])
+            one_hot_encoding_test = torch.tensor(one_hot_encoding_test, dtype=torch.float32)
+            entity_encoded = entity_emb.encoder(one_hot_encoding_test)
+            entity_encoded = torch.reshape(entity_encoded,
+                                           (entity_encoded.shape[0] * entity_encoded.shape[1],
+                                            entity_encoded.shape[-1]))
+            entity_encoded = pd.DataFrame(torch.detach(entity_encoded).numpy(), index=X_test.index,
+                                          columns=['_'.join(('Embedding', str(i))) for i in range(1, dim + 1)])
+            X_test = pd.concat([X_test, entity_encoded], axis=1)
+            X_test = X_test.values.reshape(one_hot_encoding_test.shape[0],
+                                           one_hot_encoding_test.shape[1],
+                                           X_test.shape[1])
+            pdb.set_trace()
+        pdb.set_trace()
 
     def add_metrics(self, training_scheme: str, regression_type: str = 'linear', transformation: str = None,
                     **kwargs) -> None:
-        for symbol in ModelBuilder.coins:
+        for symbol in [list(set(kwargs['df'].columns).intersection(set(ModelBuilder.coins)))[4]]:
             if training_scheme == 'SAM':
                 if self._model_type in ['ar', 'har', 'har_mkt', 'risk_metrics']:
                     exog = \
@@ -485,7 +706,7 @@ class ModelBuilder:
                 """Number of cluster selection procedure"""
                 silhouette = list()
                 tmp = kwargs['df'].transpose().copy()
-                for k in range(2, len(ModelBuilder.coins)-1):
+                for k in range(2, len(tmp.index)-1):
                     ModelBuilder._kmeans.n_clusters = k
                     ModelBuilder._kmeans.fit(tmp)
                     silhouette.append(silhouette_score(tmp, ModelBuilder._kmeans.labels_))
@@ -517,9 +738,25 @@ class ModelBuilder:
                         ModelBuilder._factory_model_type_dd[self._model_type].builder(F=self._F, df=kwargs['df'],
                                                                                       df2=kwargs['df2'],
                                                                                       symbol=kwargs['df'].columns)
-            exog = ModelBuilder._factory_transformation_dd[transformation]['transformation'](exog)
-            self.add_metrics_per_symbol(symbol, training_scheme, exog, kwargs['agg'], regression_type,
-                                        transformation)
+            elif training_scheme == 'UAM':
+                feature_universal_obj = FeatureUniversal()
+                exog = feature_universal_obj.builder(df=kwargs['df'], F=self._F, model=self._model_type)
+            if training_scheme != 'UAM':
+                exog.replace(0, np.nan, inplace=True)
+                exog.ffill(inplace=True)
+            numerical_features = exog.dtypes
+            numerical_features = numerical_features[numerical_features == 'float64'].index.tolist()
+            exog[numerical_features] = \
+                ModelBuilder._factory_transformation_dd[transformation]['transformation'](exog[numerical_features])
+            if training_scheme != 'UAM':
+                exog.replace(-np.inf, np.nan, inplace=True)
+                exog.ffill(inplace=True)
+                self.add_metrics_per_symbol(symbol, training_scheme, exog, kwargs['agg'], regression_type,
+                                            transformation)
+            else:
+                self.add_metrics_universal(exog=exog, regression_type=regression_type, transformation=transformation,
+                                           agg=kwargs['agg'])
+
 
 
 class DMTest:
@@ -570,7 +807,7 @@ class DMTest:
 
 class Commonality:
 
-    _reader_obj = Reader()
+    _reader_obj = Reader(directory=os.path.abspath('./data_centre/tmp'))
     _rv = _reader_obj.rv_read(variance=True)
     _mkt = _rv.mean(axis=1)
     _commonality_connect_db = sqlite3.connect(database=os.path.abspath('./data_centre/databases/commonality.db'))
@@ -593,6 +830,8 @@ class Commonality:
                                       columns=Commonality._rv.columns)
         for i in range(0, Commonality._rv.shape[1]):
             X_train = Commonality._rv.copy()
+            X_train.replace(-1*np.inf, np.nan, inplace=True)
+            X_train.ffill(inplace=True)
             y_train = X_train.iloc[:, i]
             X_train = X_train.mean(axis=1).values.reshape(-1, 1)
             self._rv_fitted.iloc[:, i] = Commonality._linear.fit(X_train, y_train).predict(X_train)

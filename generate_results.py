@@ -12,12 +12,12 @@ if __name__ == '__main__':
     ####################################################################################################################
     #### Fit models
     ####################################################################################################################
-    data_obj = Reader(file='./data_centre/tmp/aggregate2022')
+    data_obj = Reader(directory=os.path.abspath('./data_centre/tmp'))
     parser = argparse.ArgumentParser(description='Model Lab: Fit and store model results of research project 1.')
     parser.add_argument('--training_scheme', default=False, help='Training scheme under which models are trained.',
                         type=str)
     parser.add_argument('--save', default=True, help='Whether to save plots or not.', type=bool)
-    parser.add_argument('--models', help='List of models to fit.')
+    parser.add_argument('--models', help='Model to fit.')
     parser.add_argument('--F', default=['30T', '1H', '6H', '12H'],
                         help='Set of initial features for har components of the models.')
     parser.add_argument('--L', default='1D', help='Lookback window.')

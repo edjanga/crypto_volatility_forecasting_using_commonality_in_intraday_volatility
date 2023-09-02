@@ -1,7 +1,8 @@
+import os.path
 import pdb
 import typing
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 from pytz import timezone
 from dataclasses import dataclass
 from datetime import time
@@ -82,7 +83,8 @@ class FeatureBuilderBase:
     def name(self):
         return self._name
 
-    def builder(self, symbol: typing.Union[typing.Tuple[str], str], df: pd.DataFrame, F: typing.List[str]):
+    def builder(self, symbol: typing.Union[typing.Tuple[str], str], df: pd.DataFrame, F: typing.List[str],
+                training_scheme: str):
         """To be overwritten by each child class"""
         pass
 
@@ -97,7 +99,10 @@ class FeatureAR(FeatureBuilderBase):
         if isinstance(symbol, str):
             symbol = (symbol, symbol)
         list_symbol = list(dict.fromkeys(symbol).keys())
-        symbol_df = df[list_symbol].copy()
+        try:
+            symbol_df = df[list_symbol].copy()
+        except KeyError:
+            pdb.set_trace()
         if len(symbol) > 1:
             tmp = symbol_df.copy()
             for f in F:
@@ -109,7 +114,7 @@ class FeatureAR(FeatureBuilderBase):
 
 class FeatureRiskMetricsEstimator(FeatureBuilderBase):
 
-    data_obj = Reader(file='./data_centre/tmp/aggregate2022')
+    data_obj = Reader(directory=os.path.abspath('./data_centre/tmp'))
     factor = .94 #lambda in formula
 
     def __init__(self):
@@ -180,7 +185,7 @@ class FeatureHARMkt(FeatureBuilderBase):
         return df
 
     def builder(self, symbol: typing.Union[typing.Tuple[str], str], df: pd.DataFrame,
-                F: typing.List[str], odds=True)\
+                F: typing.List[str], odds=False)\
             -> pd.DataFrame:
         """
             Odds instead of binary to allow for log transformation.
@@ -268,7 +273,6 @@ class FeatureHARMkt(FeatureBuilderBase):
 #         """
 
 
-
 class FeatureHARCDR(FeatureBuilderBase):
 
     def __init__(self):
@@ -341,62 +345,27 @@ class FeatureHARCSR(FeatureBuilderBase):
         return symbol_rv_df
 
 
-# class FeatureHARUniversal(FeatureBuilderBase):
-#
-#     label_encoder_obj = LabelEncoder()
-#     def __init__(self):
-#         super().__init__('har_universal')
-#
-#     def builder(self, df: pd.DataFrame, F: typing.List[str]) -> pd.DataFrame:
-#         rv_universal_df = pd.melt(df.reset_index(), id_vars='timestamp', value_name='rv', var_name='symbol')
-#
-#         def build_per_symbol(symbol_rv_df: pd.DataFrame, F: typing.List[str]=F) -> pd.DataFrame:
-#             symbol_rv_df = pd.pivot(symbol_rv_df, index='timestamp', values='rv', columns='symbol')
-#             symbol_rv_df.columns.name = None
-#             symbol = symbol_rv_df.columns[0]
-#             for _, lookback in enumerate(F):
-#                 if self._5min_buckets_lookback_window_dd[lookback] <= 288:
-#                     offset = self._lookback_window_dd[lookback]
-#                     symbol_rv_df = symbol_rv_df.join(symbol_rv_df[[symbol]].shift(offset), how='left',
-#                                                      rsuffix=f'_{lookback}')
-#                 else:
-#                     symbol_rv_df = \
-#                         symbol_rv_df.join(symbol_rv_df[[symbol]].apply(self._lookback_window_dd[lookback]).shift(1),
-#                                           how='left', rsuffix=f'_{lookback}')
-#             symbol_rv_df.ffill(inplace=True)
-#             symbol_rv_df.dropna(inplace=True)
-#             symbol_rv_df = symbol_rv_df.assign(symbol=symbol)
-#             symbol_rv_df.columns = symbol_rv_df.columns.str.replace(symbol, 'RV')
-#             return symbol_rv_df
-#         group_symbol = rv_universal_df.groupby(by='symbol')
-#         rv_universal_df = group_symbol.apply(build_per_symbol).droplevel(0)
-#         rv_universal_df.symbol = FeatureHARUniversal.label_encoder_obj.fit_transform(rv_universal_df.symbol)
-#         rv_universal_df = rv_universal_df.reset_index().set_index(['timestamp', 'symbol'])
-#         return rv_universal_df
-#
-#
-# class FeatureHARUniversalPuzzle(FeatureBuilderBase):
-#
-#     label_encoder_obj = LabelEncoder()
-#
-#     def __init__(self):
-#         super().__init__('har_universal_puzzle')
-#
-#     def builder(self, df: pd.DataFrame, F: typing.Union[str, typing.List[str]]) -> pd.DataFrame:
-#         y = df.unstack()
-#         y.name = 'RV'
-#         global X
-#         X = \
-#             pd.melt(df, ignore_index=False,
-#                     value_name='RV', var_name='symbol').groupby(by='symbol', group_keys=True)
-#         own = pd.concat([har_features_puzzle(X.get_group(group), F) for group in X.groups])
-#         row = pd.concat([har_features_puzzle(X.get_group(group), F, own=False) for group in X.groups], axis=1)
-#         X = own.reset_index().set_index('timestamp').join(row, how='left').reset_index()
-#         X = X.set_index(['symbol', 'timestamp']).sort_index(level=0)
-#         rv_universal_crossed_df = pd.concat([y, X], axis=1).dropna()
-#         rv_universal_crossed_df = rv_universal_crossed_df.swaplevel(i='timestamp', j='symbol')
-#         rv_universal_crossed_df.index = \
-#             rv_universal_crossed_df.index.set_levels(
-#                 FeatureHARUniversalPuzzle.label_encoder_obj.fit_transform(
-#                     rv_universal_crossed_df.index.levels[1]), level=1)
-#         return rv_universal_crossed_df
+class FeatureUniversal(FeatureBuilderBase):
+
+    models_dd = {'risk_metrics': FeatureRiskMetricsEstimator(), 'ar': FeatureAR(),
+                 'har': FeatureHAR(), 'har_mkt': FeatureHARMkt()}
+
+    def __init__(self):
+        super().__init__('har_universal')
+
+    def builder(self, df: pd.DataFrame, model: str, F: typing.List[str],
+                drop: bool = False) -> pd.DataFrame:
+        model_obj = FeatureUniversal.models_dd[model]
+        tmp = df.copy().replace(0, np.nan).ffill()
+        own = pd.DataFrame(tmp.unstack(), columns=['RV']).reset_index().set_index('timestamp')
+        own = pd.concat([own, pd.get_dummies(own.level_0)], axis=1)
+        own = own.rename(columns={col: '_'.join(('is', col)) for col in own.columns[2:]})
+        if drop:
+            own.drop(own.columns[np.random.randint(1, own.shape[1])], axis=1, inplace=True)
+        universe = pd.concat([model_obj.builder(symbol=tmp.columns, df=tmp, F=F)] * tmp.shape[1])
+        universe = pd.concat([own.reset_index(), universe.reset_index()], axis=1)
+        universe.dropna(inplace=True)
+        universe = universe.loc[:, ~universe.columns.duplicated('first')]
+        universe = universe.set_index('timestamp')
+        universe.drop('level_0', axis=1, inplace=True)
+        return universe
