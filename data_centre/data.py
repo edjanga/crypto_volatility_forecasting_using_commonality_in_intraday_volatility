@@ -1,4 +1,6 @@
 import pdb
+
+import pytz
 from scipy.stats.mstats import winsorize
 from sklearn.preprocessing import MinMaxScaler
 import pandas as pd
@@ -11,17 +13,21 @@ class Reader:
 
     _min_max_scaler = MinMaxScaler()
 
-    def __init__(self, directory: str = './tmp'):
-        self._directory = directory
-        """Filter based on volume"""
+    def __init__(self):
+        _data_centre_dir = os.path.abspath(__file__).replace('/data.py', '/tmp')
+        self._directory = _data_centre_dir
         self._df = \
             pd.concat([pd.read_parquet(f'{self._directory}/aggregate{str(year)}') for year in [2021, 2022, 2023]])
-        symbol = self._df.isnull().sum()
-        symbol.sort_values(inplace=True)
-        symbol = symbol.iloc[:-4].index.tolist()
-        self._df = self._df[symbol]
-        self._df.index = pd.to_datetime(self._df.index)
         self._df.ffill(inplace=True)
+        self._df.dropna(axis=1, inplace=True)
+        self._volume_df = \
+            pd.concat([pd.read_parquet(f'{self._directory}/aggregate{str(year)}_volume') for
+                       year in [2021, 2022, 2023]])[self._df.columns]
+        self._df.index = pd.to_datetime(self._df.index, utc=pytz.UTC)
+        self._volume_df.index = pd.to_datetime(self._volume_df.index, utc=pytz.UTC)
+        most_liquid_pairs = self._volume_df.mul(self._df).sum().sort_values(ascending=False)[:20].index
+        self._df = self._df[most_liquid_pairs]
+        self._volume_df = self._volume_df[most_liquid_pairs]
 
     def prices_read(self, symbol: typing.Union[str, typing.List[str]] = None) -> pd.DataFrame:
         prices = self._df
@@ -35,6 +41,7 @@ class Reader:
         volumes = pd.concat([pd.read_parquet(f'{self._directory}/aggregate{str(year)}_volume')
                              for year in [2021, 2022, 2023]])
         volumes = volumes[self._df.columns]
+        volumes.index = pd.to_datetime(volumes.index, utc=pytz.UTC)
         return volumes
 
     def returns_read(self, cutoff_low: float = .01, cutoff_high: float = .01, raw: bool=False,
@@ -50,8 +57,7 @@ class Reader:
             returns_df = returns_df.apply(lambda x: winsorize(x, (cutoff_low, cutoff_high)))
         if resampled:
             returns_df = returns_df.resample('5T').sum()
-        returns_df.replace(0, np.nan, inplace=True)
-        returns_df.ffill(inplace=True)
+        returns_df.fillna(returns_df.expanding().mean(), inplace=True)
         return returns_df
 
     def rv_read(self, cutoff_low: float = .01, cutoff_high: float = .01, raw: bool = False,
@@ -60,7 +66,6 @@ class Reader:
         rv_df = \
             self.returns_read(cutoff_low=cutoff_low, cutoff_high=cutoff_high,
                               raw=raw, resampled=False, symbol=symbol)**2
-        rv_df.replace(0, np.nan, inplace=True)
         rv_df.ffill(inplace=True)
         rv_df = rv_df.resample('5T').sum() if variance else rv_df.resample('5T').sum()**.5
         rv_df.replace(0, np.nan, inplace=True)
@@ -112,7 +117,7 @@ class Reader:
 
 
 if __name__ == '__main__':
-    reader_obj = Reader(directory='./tmp')
+    reader_obj = Reader()
     #prices = reader_obj.prices_read(symbol=['BTCUSDT', 'ETHUSDT'])
-    reader_obj.volumes_read()
+    reader_obj.rv_read()
     pdb.set_trace()

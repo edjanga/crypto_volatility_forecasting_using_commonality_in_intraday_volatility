@@ -2,47 +2,11 @@ import os.path
 import pdb
 import typing
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 from pytz import timezone
 from dataclasses import dataclass
 from datetime import time
 import numpy as np
 from data_centre.data import Reader
-
-
-"""Functions and variables used to facilitate computation within classes."""
-# L_shift_dd = dict([('5T', pd.to_timedelta('5T')//pd.to_timedelta('5T')),
-#                    ('30T', pd.to_timedelta('30T') // pd.to_timedelta('5T')),
-#                    ('1H', pd.to_timedelta('1H')//pd.to_timedelta('5T')),
-#                    ('6H', pd.to_timedelta('6H')//pd.to_timedelta('5T')),
-#                    ('12H', pd.to_timedelta('12H')//pd.to_timedelta('5T')),
-#                    ('1D', pd.to_timedelta('1D')//pd.to_timedelta('5T')),
-#                    ('1W', lambda x:x.resample('7D').mean()), ('SAM', lambda x:x.resample('30D').mean())])
-
-
-# def universal(df: pd.DataFrame, F: typing.Union[str, typing.List[str]], own=True) -> pd.DataFrame:
-#     symbol = df.symbol.unique()[0]
-#     for _, lookback in enumerate(F):
-#         tmp = df['RV']
-#         tmp.name = '_'.join(('RV', lookback)) if own else '_'.join((symbol, lookback))
-#         if pd.to_timedelta(lookback)//pd.to_timedelta('5T') <= 288:
-#             offset = pd.to_timedelta(lookback)//pd.to_timedelta('5T')
-#             df = df.join(tmp.shift(offset), how='left', rsuffix=f'_{lookback}')
-#         else:
-#             df = df.join(L_shift_dd[lookback](tmp).shift(1), how='left', rsuffix=f'_{lookback}')
-#     df.ffill(inplace=True)
-#     df.drop('RV', axis=1, inplace=True)
-#     df.dropna(inplace=True)
-#     df = df.reset_index().set_index(['symbol', 'timestamp'])
-#     if not own:
-#         df = df.droplevel(axis=0, level=0)
-#     return df
-
-
-# def rv_1w_correction(df: pd.DataFrame, L: str='1W') -> pd.DataFrame:
-#     feature_name = df.filter(regex=f'_{L}').columns[0]
-#     df.loc[:, feature_name] = df.loc[:, feature_name].value_counts().sort_values(ascending=False).index[0]
-#     return df
 
 
 @dataclass
@@ -64,24 +28,16 @@ class FeatureBuilderBase:
                                 ('6H', pd.to_timedelta('6H')//pd.to_timedelta('5T')),
                                 ('12H', pd.to_timedelta('12H')//pd.to_timedelta('5T')),
                                 ('1D', pd.to_timedelta('1D')//pd.to_timedelta('5T')),
-                                ('1W', '7D'),
-                                ('1M', '30D')])
+                                ('1W', '7D'), ('1M', '30D'), ('6M', '180D')])
 
-
-    _5min_buckets_lookback_window_dd = \
-        {lookback: pd.to_timedelta(lookback) // pd.to_timedelta('5T') for
-         lookback in _lookback_window_dd.keys() if lookback != '1M'}
-
+    _5min_buckets_lookback_window_dd = {lookback: pd.to_timedelta(lookback) // pd.to_timedelta('5T') for
+                                        lookback in _lookback_window_dd.keys() if lookback not in ['1M', '6M']}
     #Add manually as pd.to_timedelta does not take '1M' as argument
     _5min_buckets_lookback_window_dd['1M'] = pd.to_timedelta('30D') // pd.to_timedelta('5T')
+    _5min_buckets_lookback_window_dd['6M'] = pd.to_timedelta('180D') // pd.to_timedelta('5T')
 
-    def __init__(self, name, indiv: bool=True):
+    def __init__(self, name):
         self._name = name
-        self._indv = indiv
-
-    @property
-    def name(self):
-        return self._name
 
     def builder(self, symbol: typing.Union[typing.Tuple[str], str], df: pd.DataFrame, F: typing.List[str],
                 training_scheme: str):
@@ -91,34 +47,28 @@ class FeatureBuilderBase:
 
 class FeatureAR(FeatureBuilderBase):
 
-    def __init__(self, indiv: bool=True):
-        super().__init__('ar', indiv)
+    def __init__(self):
+        super().__init__('ar')
 
     def builder(self, df: pd.DataFrame, symbol: typing.Union[typing.Tuple[str], str],
                 F: typing.List[str] = None) -> pd.DataFrame:
         if isinstance(symbol, str):
             symbol = (symbol, symbol)
         list_symbol = list(dict.fromkeys(symbol).keys())
-        try:
-            symbol_df = df[list_symbol].copy()
-        except KeyError:
-            pdb.set_trace()
-        if len(symbol) > 1:
-            tmp = symbol_df.copy()
-            for f in F:
-                tmp = tmp.rename(columns={f'{sym}': f'{sym}_{f}' for sym in tmp.columns})
-                tmp = tmp.shift(FeatureAR._lookback_window_dd[f])
-                symbol_df = symbol_df.join(tmp, how='left')
+        symbol_df = df[list_symbol].copy()
+        tmp = symbol_df.copy()
+        tmp = tmp.shift(FeatureAR._lookback_window_dd[F[0]])
+        symbol_df = symbol_df.join(tmp, how='left', rsuffix=f'_{F[0]}')
         return symbol_df.dropna()
 
 
 class FeatureRiskMetricsEstimator(FeatureBuilderBase):
 
-    data_obj = Reader(directory=os.path.abspath('./data_centre/tmp'))
     factor = .94 #lambda in formula
 
     def __init__(self):
         super().__init__('risk_metrics')
+        FeatureRiskMetricsEstimator.data_obj = Reader()
 
     def builder(self, F: typing.Union[typing.List[str], str],
                 df: pd.DataFrame, symbol: typing.Union[str, typing.List[str]]) -> pd.DataFrame:
@@ -155,22 +105,18 @@ class FeatureHAR(FeatureBuilderBase):
                                            how='left', rsuffix=f'_{lookback}')
             else:
                 symbol_df = \
-                    symbol_df.join(symbol_df[list_symbol].resample(offset).mean(),
+                    symbol_df.join(symbol_df[list_symbol].resample(offset).mean().shift(),
                                    how='left', rsuffix=f'_{lookback}')
         symbol_df.ffill(inplace=True)
         symbol_df.dropna(inplace=True)
         return symbol_df
 
 
-class FeatureHARMkt(FeatureBuilderBase):
+class FeatureHAREq(FeatureBuilderBase):
 
     def __init__(self):
-        super().__init__('har_mkt')
+        super().__init__('har_eq')
         self._markets = Market()
-
-    @property
-    def markets(self):
-        return self._markets
 
     @staticmethod
     def binary_to_odds(df: pd.DataFrame) -> pd.DataFrame:
@@ -201,7 +147,7 @@ class FeatureHARMkt(FeatureBuilderBase):
                                            how='left', rsuffix=f'_{lookback}')
             else:
                 symbol_df = \
-                    symbol_df.join(symbol_df[list_symbol].resample(offset).mean(),
+                    symbol_df.join(symbol_df[list_symbol].resample(offset).mean().shift(),
                                    how='left', rsuffix=f'_{lookback}')
         symbol_df.ffill(inplace=True)
         symbol_df.dropna(inplace=True)
@@ -219,153 +165,46 @@ class FeatureHARMkt(FeatureBuilderBase):
             pd.Series(index=symbol_df.index,
                       data=False).between_time(time(hour=8, minute=0),
                                                time(hour=16, minute=30)).tz_convert(self._markets.uk_tz)
-        symbol_df = symbol_df.assign(asia_session=False, us_session=False, europe_session=False)
-        symbol_df.loc[asia_uk_idx.index, 'asia_session'] = True
-        symbol_df.loc[us_uk_idx.index, 'us_session'] = True
-        symbol_df.loc[eu_idx.index, 'europe_session'] = True
-        symbol_df[['asia_session', 'us_session', 'europe_session']] = \
-            symbol_df[['asia_session', 'us_session', 'europe_session']].astype(int)
+        symbol_df = symbol_df.assign(ASIAN_SESSION=False, US_SESSION=False, EUROPE_SESSION=False)
+        symbol_df.loc[asia_uk_idx.index, 'ASIAN_SESSION'] = True
+        symbol_df.loc[us_uk_idx.index, 'US_SESSION'] = True
+        symbol_df.loc[eu_idx.index, 'EUROPE_SESSION'] = True
+        symbol_df[['ASIAN_SESSION', 'US_SESSION', 'EUROPE_SESSION']] = \
+            symbol_df[['ASIAN_SESSION', 'US_SESSION', 'EUROPE_SESSION']].astype(int)
         symbol_df.dropna(inplace=True)
         symbol_df = symbol_df.loc[~symbol_df.index.duplicated(), :]
         if odds:
-            symbol_df[['asia_session', 'us_session', 'europe_session']] = \
-                symbol_df[['asia_session', 'us_session', 'europe_session']].groupby(
-                by=symbol_df.index.date).apply(lambda x: FeatureHARMkt.binary_to_odds(x))
+            tmp_odds = symbol_df[['ASIAN_SESSION', 'US_SESSION', 'EUROPE_SESSION']].groupby(
+                by=symbol_df.index.date).apply(lambda x: FeatureHAREq.binary_to_odds(x))
+            tmp_odds = tmp_odds.droplevel(0, 0)
+            symbol_df[['ASIAN_SESSION', 'US_SESSION', 'EUROPE_SESSION']] = \
+                tmp_odds[['ASIAN_SESSION', 'US_SESSION', 'EUROPE_SESSION']]
         return symbol_df
-
-
-# class FeatureHARJ(FeatureBuilderBase):
-#
-#     def __init__(self):
-#         super().__init__('har_j')
-#         self._markets = Market()
-#
-#     def builder(self, symbol: typing.Union[typing.Tuple[str], str], df: pd.DataFrame,
-#               df2: pd.DataFrame, F: typing.List[str]) -> pd.DataFrame:
-#         if isinstance(symbol, str):
-#             symbol = (symbol, symbol)
-#         list_symbol = list(dict.fromkeys(symbol).keys())
-#         symbol_rv_df = df[list_symbol].copy()
-#         symbol_cdr_df = df2[[list_symbol[-1]]].copy()
-#         for _, lookback in enumerate(F):
-#             if self._5min_buckets_lookback_window_dd[lookback] <= 288:
-#                 offset = self._lookback_window_dd[lookback]
-#                 symbol_rv_df = symbol_rv_df.join(symbol_rv_df[[symbol[-1]]].shift(offset), how='left',
-#                                                  rsuffix=f'_{lookback}')
-#                 symbol_cdr_df = symbol_cdr_df.join(symbol_cdr_df[[symbol[-1]]].shift(offset), how='left',
-#                                                  rsuffix=f'_{lookback}')
-#             else:
-#                 symbol_rv_df = \
-#                     symbol_rv_df.join(symbol_rv_df[[symbol[-1]]].apply(self._lookback_window_dd[lookback]).shift(1),
-#                                       how='left', rsuffix=f'_{lookback}')
-#                 symbol_cdr_df = \
-#                     symbol_cdr_df.join(symbol_cdr_df[[symbol[-1]]].apply(self._lookback_window_dd[lookback]).shift(1),
-#                                       how='left', rsuffix=f'_{lookback}')
-#         symbol_rv_df.ffill(inplace=True)
-#         symbol_rv_df.dropna(inplace=True)
-#         symbol_rv_df = symbol_rv_df.join(symbol_cdr_df, how='left', rsuffix='_CDR')
-#         return symbol_rv_df
-#
-#     @staticmethod
-#     def jump(df: pd.DataFrame) -> pd.DataFrame:
-#         """
-#             Definition of jump according to Rahimikia & Poon
-#         """
-
-
-class FeatureHARCDR(FeatureBuilderBase):
-
-    def __init__(self):
-        super().__init__('har_cdr')
-        self._markets = Market()
-
-    def builder(self, symbol: typing.Union[typing.Tuple[str], str], df: pd.DataFrame,
-              df2: pd.DataFrame, F: typing.List[str]) -> pd.DataFrame:
-        if isinstance(symbol, str):
-            symbol = (symbol, symbol)
-        list_symbol = list(dict.fromkeys(symbol).keys())
-        symbol_rv_df = df[list_symbol].copy()
-        symbol_cdr_df = df2[[list_symbol[-1]]].copy()
-        for _, lookback in enumerate(F):
-            offset = self._lookback_window_dd[lookback]
-            if self._5min_buckets_lookback_window_dd[lookback] <= 288:
-                symbol_rv_df = symbol_rv_df.join(symbol_rv_df[list_symbol].shift(offset), how='left',
-                                                 rsuffix=f'_{lookback}')
-                symbol_cdr_df = symbol_cdr_df.join(symbol_cdr_df[list_symbol].shift(offset), how='left',
-                                                 rsuffix=f'_{lookback}')
-            else:
-                tmp = symbol_rv_df[list_symbol].resample('1D').mean()
-                symbol_rv_df = \
-                    symbol_rv_df.join(tmp.rolling(self._lookback_window_dd[lookback]).mean(),
-                                      how='left', rsuffix=f'_{lookback}')
-                tmp = symbol_cdr_df[list_symbol].resample('1D').mean()
-                symbol_cdr_df = \
-                    symbol_cdr_df.join(tmp.rolling(self._lookback_window_dd[lookback]).mean(),
-                                                   how='left', rsuffix=f'_{lookback}')
-        symbol_rv_df.ffill(inplace=True)
-        symbol_rv_df.dropna(inplace=True)
-        symbol_rv_df = symbol_rv_df.join(symbol_cdr_df, how='left', rsuffix='_CDR')
-        return symbol_rv_df
-
-
-class FeatureHARCSR(FeatureBuilderBase):
-
-    def __init__(self):
-        super().__init__('har_csr')
-        self._markets = Market()
-
-    def builder(self, symbol: typing.Union[typing.Tuple[str], str], df: pd.DataFrame,
-                df2: pd.DataFrame, F: typing.List[str]) -> pd.DataFrame:
-        if isinstance(symbol, str):
-            symbol = (symbol, symbol)
-        list_symbol = list(dict.fromkeys(symbol).keys())
-        symbol_rv_df = df[list_symbol].copy()
-        symbol_csr_df = df2[[list_symbol[-1]]].copy()
-        for _, lookback in enumerate([F[-1]]):
-            if self._5min_buckets_lookback_window_dd[lookback] <= 288:
-                offset = self._lookback_window_dd[lookback]
-                symbol_rv_df = symbol_rv_df.join(symbol_rv_df[list_symbol].shift(offset), how='left',
-                                                 rsuffix=f'_{lookback}')
-                symbol_csr_df = symbol_csr_df.join(symbol_csr_df[list_symbol].shift(offset), how='left',
-                                                   rsuffix=f'_{lookback}')
-            else:
-                tmp = symbol_rv_df[list_symbol].resample('1D').mean()
-                symbol_rv_df = \
-                    symbol_rv_df.join(tmp.rolling(self._lookback_window_dd[lookback]).mean(),
-                                      how='left', rsuffix=f'_{lookback}')
-                tmp = symbol_csr_df[list_symbol].resample('1D').mean()
-                symbol_csr_df = \
-                    symbol_csr_df.join(tmp.rolling(self._lookback_window_dd[lookback]).mean(),
-                                       how='left', rsuffix=f'_{lookback}')
-        symbol_rv_df.ffill(inplace=True)
-        symbol_rv_df.dropna(inplace=True)
-        symbol_csr_df.ffill(inplace=True)
-        symbol_csr_df.dropna(inplace=True)
-        symbol_rv_df = symbol_rv_df.join(symbol_csr_df, how='left', rsuffix='_CSR')
-        return symbol_rv_df
 
 
 class FeatureUniversal(FeatureBuilderBase):
 
-    models_dd = {'risk_metrics': FeatureRiskMetricsEstimator(), 'ar': FeatureAR(),
-                 'har': FeatureHAR(), 'har_mkt': FeatureHARMkt()}
+    models_dd = {'ar': FeatureAR(),
+                 'har': FeatureHAR(), 'har_eq': FeatureHAREq(),
+                 'risk_metrics': FeatureRiskMetricsEstimator()}
 
     def __init__(self):
         super().__init__('har_universal')
 
     def builder(self, df: pd.DataFrame, model: str, F: typing.List[str],
-                drop: bool = False) -> pd.DataFrame:
+                drop: bool = False, one_hot_encoding: bool = False, full: bool = True) -> pd.DataFrame:
         model_obj = FeatureUniversal.models_dd[model]
         tmp = df.copy().replace(0, np.nan).ffill()
         own = pd.DataFrame(tmp.unstack(), columns=['RV']).reset_index().set_index('timestamp')
-        own = pd.concat([own, pd.get_dummies(own.level_0)], axis=1)
-        own = own.rename(columns={col: '_'.join(('is', col)) for col in own.columns[2:]})
-        if drop:
-            own.drop(own.columns[np.random.randint(1, own.shape[1])], axis=1, inplace=True)
-        universe = pd.concat([model_obj.builder(symbol=tmp.columns, df=tmp, F=F)] * tmp.shape[1])
-        universe = pd.concat([own.reset_index(), universe.reset_index()], axis=1)
-        universe.dropna(inplace=True)
-        universe = universe.loc[:, ~universe.columns.duplicated('first')]
-        universe = universe.set_index('timestamp')
-        universe.drop('level_0', axis=1, inplace=True)
+        if full:
+            universe = model_obj.builder(symbol=tmp.columns, df=tmp, F=F)
+            universe = own.groupby(by='level_0').apply(lambda x, universe: x.join(universe, how='inner'), universe)
+            universe = universe.droplevel(axis=0, level=0)
+        else:
+            universe = {symbol: model_obj.builder(symbol=symbol, df=tmp, F=F) for symbol in df.columns}
+            for symbol, df_symbol in universe.items():
+                df_symbol.columns = df_symbol.columns.str.replace(symbol, 'RV')
+                df_symbol['level_0'] = symbol
+            universe = pd.concat(universe.values())
+        universe = universe.rename(columns={'level_0': 'symbol'})
         return universe

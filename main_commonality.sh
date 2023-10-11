@@ -4,17 +4,9 @@ source ./venv/bin/activate
 #######################################################
 ## Commonality for different time horizons.
 #######################################################
-generate=True
-save=True
-if [ "$generate" = "True" ]
-then
-  for L in {1D,1W,1M}
-    do
-      python ./generate_commonality.py --L=$L --transformation=log --generate=$generate --save=False
-    done
-fi
-generate=False
-python ./generate_commonality.py --transformation=log --generate=$generate --save=$save
-
-
+for L in {1W,1M,6M}
+  do
+    python ./generate_commonality.py --L=$L --transformation=log --generate=1 --save=0
+  done
+python ./generate_commonality.py --transformation=log --generate=0 --save=1
 deactivate

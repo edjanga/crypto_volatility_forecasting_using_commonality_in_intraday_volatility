@@ -12,32 +12,25 @@ import plotly.express as px
 import plotly.graph_objs as go
 from datetime import datetime
 import numpy as np
-import matplotlib.pyplot as plt
-import statsmodels.api as sm
-from scipy.stats.mstats import winsorize
-from statsmodels.regression.rolling import RollingOLS
-import concurrent.futures
-import itertools
-from sklearn.cluster import KMeans
-import pickle
-import swifter
-from sklearn.metrics import pairwise_distances
-import seaborn as sns
 import sqlite3
 from sklearn.metrics import silhouette_score
 from sklearn.cluster import KMeans
 import plotly.io as pio
 pio.kaleido.scope.mathjax = None
-class EDA:
+import torch
 
-    reader_object = Reader(directory=os.path.abspath('./data_centre/tmp'))
+
+class EDA:
+    _plots_dir = os.path.abspath(__file__).replace('/plots/maker_copy.py', '/plots')
+    reader_object = Reader()
     rv = reader_object.rv_read()
     returns = reader_object.returns_read()
 
     def __init__(self):
         pass
 
-    def optimal_clusters(self) -> None:
+    @staticmethod
+    def optimal_clusters() -> None:
         kmeans = KMeans(n_init='auto', random_state=123)
         silhouette = list()
         tmp = EDA.rv.transpose().copy()
@@ -48,11 +41,11 @@ class EDA:
         fig = make_subplots(rows=1, cols=1)
         fig.add_traces(data=go.Bar(x=list(range(2, len(silhouette) + 2)), y=silhouette, showlegend=False))
         fig.add_traces(data=go.Scatter(name='k', x=list(range(2, len(silhouette) + 2)),
-                                       mode='lines+markers', marker=dict(size=15), y=silhouette, showlegend=False))
+                                       mode='lines+markers', marker=dict(size=10), y=silhouette, showlegend=False))
         fig.update_xaxes(title='Number of clusters')
         fig.update_yaxes(title='Silhouette score')
         fig.update_layout(title='Optimal number of clusters: Analysis')
-        fig.write_image(os.path.abspath('./plots/n_clusters.pdf'))
+        fig.write_image(os.path.abspath(f'{EDA._plots_dir}/n_clusters.pdf'))
         print(f'[Plots]: Selection optimal cluster plot has been generated.')
 
     def daily_rv(self) -> None:
@@ -80,7 +73,7 @@ class EDA:
                                  line_color='blue', line={'width': 3}, showlegend=False))
         fig.update_xaxes(tickangle=45)
         fig.update_layout(height=500, width=800)
-        fig.write_image(os.path.abspath('./plots/daily_rv.pdf'))
+        fig.write_image(os.path.abspath(f'{EDA._plots_dir}/daily_rv.pdf'))
 
     def intraday_rv(self) -> None:
         rv_df = np.log(self.rv.resample('30T').sum())
@@ -98,7 +91,6 @@ class EDA:
         diurnal_rv_df.index = [idx.strftime('%H:%M') for idx in diurnal_rv_df.index]
         hours_ls = list(diurnal_rv_df.index)
         diurnal_rv_df.ffill(inplace=True)
-        #diurnal_rv_df = np.log(diurnal_rv_df)
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=diurnal_rv_df.index, y=diurnal_rv_df.percentile95, fill=None, mode='lines',
                                  line_color='orange', line={'width': 1, 'dash': 'dash'}, showlegend=False))
@@ -135,31 +127,19 @@ class EDA:
         fig.update_layout(height=500, width=800)
         fig.write_image(os.path.abspath('./plots/intraday_rv.pdf'))
 
-    # def histogram(self) -> None:
-    #     col_grid = 3
-    #     row_grid = 2#len(coin_ls)//col_grid
-    #     sym_ls = [''.join((coin, 'usdt')).upper() for _, coin in enumerate(coin_ls[:6])]
-    #     fig = make_subplots(rows=row_grid, cols=col_grid, subplot_titles=sym_ls)
-    #     for row in range(1, row_grid+1):
-    #         for col in range(1, col_grid+1):
-    #             fig.add_trace(go.Histogram(x=self.returns[f'{sym_ls[row+col-2]}'],
-    #                                        name=f'{sym_ls[row+col-2]} - returns', histnorm='probability',
-    #                                        marker_color='#4285F4', showlegend=True), row=row, col=col)
-    #             fig.add_trace(go.Histogram(x=self.rv[f'{sym_ls[row + col - 2]}'],
-    #                                        name=f'{sym_ls[row + col - 2]} - rv',
-    #                                        marker_color='#34A853'), row=row, col=col)
-    #     fig.update_layout(title='Returns and Realised Volatility: Distributions (5min bucket).',
-    #                       height=1500, width=1200, showlegend=False)
-    #     fig.write_image(os.path.abspath('./plots/distribution_returns_rv.pdf'))
-
     def daily_mean_correlation_matrix(self) -> None:
-        corr_df = self.rv.resample('1D').sum().expanding().corr().mean(level=1)
+        symbols = self.rv.columns.tolist()
+        corr = self.rv.resample('1D').sum().rolling(3).corr().dropna()
+        corr = corr.values.reshape(corr.shape[0]//corr.shape[1], corr.shape[1], corr.shape[1])
+        corr = torch.tensor(corr, dtype=torch.float32)
+        corr = torch.mean(corr, 0)
+        corr_df = pd.DataFrame(data=corr.detach().numpy(), index=symbols, columns=symbols)
         fig = go.Figure(data=go.Heatmap(z=corr_df.values, x=corr_df.columns, y=corr_df.columns, colorscale='Blues'))
         fig.update_layout(title='Daily pairwise RV correlation mean.')
-        fig.write_image(os.path.abspath('./plots/daily_mean_corr_rv.pdf'))
+        fig.write_image(os.path.abspath(f'{EDA._plots_dir}/daily_mean_corr_rv.pdf'))
 
     def daily_pairwise_correlation(self) -> None:
-        corr_df = self.rv.resample('1D').sum().expanding(min_periods=3).corr().dropna()
+        corr_df = self.rv.resample('1D').sum().rolling(3).corr().dropna()
         corr_ls = corr_df.values.flatten().tolist()
         corr_ls = [corr for _, corr in enumerate(corr_ls) if corr < 1]
         mean_corr = np.mean(corr_ls)
@@ -168,7 +148,7 @@ class EDA:
                            histnorm='probability')
         fig.add_vline(x=mean_corr, line_color='orange')
         fig.update_yaxes(title='')
-        fig.write_image(os.path.abspath('./plots/daily_pairwise_correlation_distribution.pdf'))
+        fig.write_image(os.path.abspath(f'{EDA._plots_dir}/daily_pairwise_correlation_distribution.pdf'))
 
     def boxplot(self):
 
@@ -187,26 +167,22 @@ class EDA:
             fig.add_trace(go.Box(y=tmp_rv.query(f'symbol == \"{symbol}\"')['values'].tolist(),
                                  name=symbol), row=2, col=1)
         fig.update_layout(showlegend=False)
-        fig.write_image(os.path.abspath('./plots/boxplot.png'))
-
-
-
-
-
+        fig.write_image(os.path.abspath(f'{EDA._plots_dir}/boxplot.png'))
 
 
 class PlotResults:
-
-    db_connect_coefficient = sqlite3.connect(database=os.path.abspath('./data_centre/databases/coefficients.db'))
-    db_connect_mse = sqlite3.connect(database=os.path.abspath('./data_centre/databases/mse.db'))
-    db_connect_qlike = sqlite3.connect(database=os.path.abspath('./data_centre/databases/qlike.db'))
-    db_connect_r2 = sqlite3.connect(database=os.path.abspath('./data_centre/databases/r2.db'))
-    db_connect_y = sqlite3.connect(database=os.path.abspath('./data_centre/databases/y.db'))
-    db_connect_commonality = sqlite3.connect(database=os.path.abspath('./data_centre/databases/commonality.db'))
-    db_connect_rolling_metrics = sqlite3.connect(database=os.path.abspath('./data_centre/databases/rolling_metrics.db'))
+    _data_centre_dir = os.path.abspath(__file__).replace('/plots/maker_copy.py', '/data_centre')
+    db_connect_coefficient = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/coefficients.db'))
+    db_connect_mse = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/mse.db'))
+    db_connect_qlike = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/qlike.db'))
+    db_connect_r2 = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/r2.db'))
+    db_connect_y = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/y.db'))
+    db_connect_commonality = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/commonality.db'))
+    db_connect_rolling_metrics = \
+        sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/rolling_metrics.db'))
     #db_connect_correlation = sqlite3.connect(database=os.path.abspath('./data_centre/databases/correlation.db'))
     colors_ls = px.colors.qualitative.Plotly
-    models_ls = ['ar', 'risk_metrics', 'har'] #, 'har_mkt', 'har_cdr'
+    models_ls = ['ar', 'risk_metrics', 'har', 'har_eq']
 
     def __init__(self):
         pass
@@ -405,8 +381,9 @@ class PlotResults:
         commonality = pd.read_sql(query, con=PlotResults.db_connect_commonality, index_col='index')
         commonality.index = pd.to_datetime(commonality.index)
         commonality.dropna(inplace=True)
-        commonality_group = commonality.groupby(by='L', group_keys=True)
-        commonality = commonality_group.apply(lambda x: x.resample('1M').mean()).iloc[:-1, :]
+        commonality = commonality.loc[commonality.index.isin(commonality.query('L == "6M"').index), :]
+        #commonality_group = commonality.groupby(by='L', group_keys=True)
+        #commonality = commonality_group.apply(lambda x: x.resample('6M').mean()).iloc[:-1, :]
         commonality = commonality.reset_index().set_index('index')
         commonality = commonality.rename(columns={'L': 'L_train'})
         commonality.iloc[:, 0] = [f'{L.lower()}' for L in commonality.iloc[:, 0]]
@@ -421,32 +398,35 @@ class PlotResults:
 
 
 if __name__ == '__main__':
-    performance = pd.read_csv('./performance.csv',
-                              index_col=['training_scheme', 'L', 'regression', 'model'])
-    performance = performance.query('metric == "qlike"')
-    performance = performance[['metric', 'values']]
-    performance = performance.groupby(by=[performance.index.get_level_values(0),
-                                          performance.index.get_level_values(1),
-                                          performance.index.get_level_values(2)])
-    top_performers = performance.apply(lambda x: x['values'].idxmin())
-    rolling_metrics = pd.read_csv('./rolling_metrics.csv',
-                                  index_col=['training_scheme', 'L', 'regression', 'model'])
-    rolling_metrics = rolling_metrics.loc[rolling_metrics.index.isin(top_performers.values), :]
-    rolling_metrics = \
-        rolling_metrics.assign(regression_model=['_'.join((training_scheme, L, regression, model)) for training_scheme,
-        L, regression, model in zip(rolling_metrics.index.get_level_values(0),
-                                    rolling_metrics.index.get_level_values(1),
-                                    rolling_metrics.index.get_level_values(-2),
-                                    rolling_metrics.index.get_level_values(-1))])
-    rolling_metrics = rolling_metrics.reset_index().set_index('timestamp')
-    for L in ['1D', '1W', '1M']:
-        fig1 = px.line(data_frame=rolling_metrics.query(f'L == \"{L}\" & metric=="r2"').sort_index(level=0), y='values',
-                       color='regression_model', title=f'Best performing {L} qlike model - Rolling R2')
-        fig2 = px.line(data_frame=rolling_metrics.query(f'L == \"{L}\" & metric=="mse"').sort_index(level=0),
-                       y='values', color='regression_model', title=f'Best performing {L} qlike model - Rolling MSE')
-        fig3 = px.line(data_frame=rolling_metrics.query(f'L == \"{L}\" & metric=="qlike"').sort_index(level=0),
-                       y='values', color='regression_model',
-                       title=f'Best performing {L} qlike model - Rolling QLIKE')
-        for fig in [fig1, fig2, fig3]:
-            fig.show()
+    eda_obj = EDA()
+    eda_obj.daily_pairwise_correlation()
+
+    # performance = pd.read_csv('./performance.csv',
+    #                           index_col=['training_scheme', 'L', 'regression', 'model'])
+    # performance = performance.query('metric == "qlike"')
+    # performance = performance[['metric', 'values']]
+    # performance = performance.groupby(by=[performance.index.get_level_values(0),
+    #                                       performance.index.get_level_values(1),
+    #                                       performance.index.get_level_values(2)])
+    # top_performers = performance.apply(lambda x: x['values'].idxmin())
+    # rolling_metrics = pd.read_csv('./rolling_metrics.csv',
+    #                               index_col=['training_scheme', 'L', 'regression', 'model'])
+    # rolling_metrics = rolling_metrics.loc[rolling_metrics.index.isin(top_performers.values), :]
+    # rolling_metrics = \
+    #     rolling_metrics.assign(regression_model=['_'.join((training_scheme, L, regression, model)) for training_scheme,
+    #     L, regression, model in zip(rolling_metrics.index.get_level_values(0),
+    #                                 rolling_metrics.index.get_level_values(1),
+    #                                 rolling_metrics.index.get_level_values(-2),
+    #                                 rolling_metrics.index.get_level_values(-1))])
+    # rolling_metrics = rolling_metrics.reset_index().set_index('timestamp')
+    # for L in ['1D', '1W', '1M']:
+    #     fig1 = px.line(data_frame=rolling_metrics.query(f'L == \"{L}\" & metric=="r2"').sort_index(level=0), y='values',
+    #                    color='regression_model', title=f'Best performing {L} qlike model - Rolling R2')
+    #     fig2 = px.line(data_frame=rolling_metrics.query(f'L == \"{L}\" & metric=="mse"').sort_index(level=0),
+    #                    y='values', color='regression_model', title=f'Best performing {L} qlike model - Rolling MSE')
+    #     fig3 = px.line(data_frame=rolling_metrics.query(f'L == \"{L}\" & metric=="qlike"').sort_index(level=0),
+    #                    y='values', color='regression_model',
+    #                    title=f'Best performing {L} qlike model - Rolling QLIKE')
+    #     for fig in [fig1, fig2, fig3]:
+    #         fig.show()
 

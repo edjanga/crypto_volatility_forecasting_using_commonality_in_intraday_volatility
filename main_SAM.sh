@@ -4,20 +4,20 @@ source ./venv/bin/activate
 #######################################################
 ## Model performance SAM.
 #######################################################
-#regression_type=xgboost
-for l in {1D,1W,1M}
+for l in {6M,1M,1W}
   do
-    python3 ./generate_results.py --L=$l --models=risk_metrics --training_scheme=SAM --regression=linear \
-            --transformation=log
-    python3 ./generate_results.py --L=$l --models=ar --training_scheme=SAM --regression=linear \
-            --transformation=log
-    for regression_type in {linear,lasso,elastic,ridge,pcr}
+#    python3 ./generate_results.py --L=$l --model=risk_metrics --training_scheme=SAM --regression=linear \
+#            --transformation=log
+    for regression_type in {lightgbm,elastic,lasso}
       do
-        for model in {har,har_mkt}
+        for model in {har_eq,har}
           do
-            python3 ./generate_results.py --L=$l --models=$model --training_scheme=SAM --regression=$regression_type \
-            --transformation=log
-         done
+            python3 ./generate_results.py --L=$l --model=$model --training_scheme=SAM \
+            --regression=$regression_type --transformation=log &
+          done
+          wait
       done
+    python3 ./generate_results.py --L=$l --model=ar --training_scheme=SAM --regression=linear \
+    --transformation=log
   done
 deactivate

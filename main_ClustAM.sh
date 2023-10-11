@@ -4,15 +4,16 @@ source ./venv/bin/activate
 #######################################################
 ## Model performance ClustAM.
 #######################################################
-for l in {1D,1W,1M}
+for l in {6M,1M,1W}
   do
-    for regression_type in {lasso,ridge,elastic,pcr}
+    for regression_type in {lightgbm,elastic,lasso}
       do
-        for model in {risk_metrics,ar,har,har_mkt}
+        for model in {har_eq,har,ar}
           do
-            python3 ./generate_results.py --L=$l --models=$model --training_scheme=ClustAM \
-            --regression=$regression_type --transformation=log
+            python3 ./generate_results.py --L=$l --model=$model --training_scheme=ClustAM \
+            --regression=$regression_type --transformation=log &
           done
       done
+      wait
   done
 deactivate

@@ -4,6 +4,8 @@ import pdb
 import typing
 import pandas as pd
 import numpy as np
+import pytz
+
 from data_centre.data import Reader
 import sqlite3
 from scipy.stats import skew, kurtosis
@@ -19,7 +21,7 @@ class Trader:
         Backtesting class
     """
     db_connect_y = sqlite3.connect(os.path.abspath('../data_centre/databases/y.db'), check_same_thread=False)
-    reader_obj = Reader(file='../data_centre/tmp/aggregate2022')
+    reader_obj = Reader()
     PnL_dd = dict()
     returns_dd = dict()
 
@@ -39,18 +41,18 @@ class Trader:
         def PnL_per_item(h: str, training_scheme: str, L: str, transformation: str,
                          regression_type: str, model: str) -> None:
             query = \
-                f'SELECT \"y_hat\", \"symbol\", \"timestamp\", \"model\", \"training_scheme\", \"L\",' \
+                f'SELECT \"y_hat\", \"symbol\", \"index\", \"model\", \"training_scheme\", \"L\",' \
                 f'\"transformation\", \"regression\" FROM y_{L} WHERE \"training_scheme\" = \"{training_scheme}\"' \
                 f' AND \"transformation\" = \"{transformation}\" AND \"regression\" = \"{regression_type}\"' \
                 f' AND \"model\" = \"{model}\";'
-            y_hat = pd.read_sql(query, con=Trader.db_connect_y)[['timestamp', 'y_hat', 'symbol']]
-            y_hat = y_hat.set_index('timestamp')
-            y_hat.index = pd.to_datetime(y_hat.index)
+            y_hat = pd.read_sql(query, con=Trader.db_connect_y)[['index', 'y_hat', 'symbol']]
+            y_hat = y_hat.set_index('index')
+            y_hat.index = pd.to_datetime(y_hat.index, utc=pytz.UTC)
             y_hat = \
                 pd.pivot_table(y_hat.reset_index(), values='y_hat',
-                               columns='symbol', index='timestamp').resample(h).sum()**(.5)
+                               columns='symbol', index='index').resample(h).sum()**(.5)
             signals = y_hat.rank(axis=1, ascending=False, pct=True)
-            n_pair = signals.shape[1]//10
+            n_pair = signals.shape[1]//5
             deciles = signals.iloc[0, :].sort_values()
             top, bottom = deciles.iloc[:n_pair].values, deciles.iloc[-n_pair:].values
             long_signals, short_signals = signals.isin(bottom).astype(float), signals.isin(top).astype(float)
@@ -68,16 +70,14 @@ class Trader:
                                                                regression_type=option[2], model=option[3])
                                        for option in self._top_performers.values.tolist()+
                                        self._bottom_performers.values.tolist()}
-        #option = self._top_performers[0]
-        # PnL_per_item(h=self._h, returns=self._returns, training_scheme=option[0], L=option[1], transformation='log',
-        #              regression_type=option[2], model=option[3])
 
 
 if __name__ == '__main__':
-    reader_obj = Reader(file=os.path.abspath('../data_centre/tmp/aggregate2022'))
+    reader_obj = Reader()
     returns = reader_obj.returns_read()
     """Selection of top 5 performing models using QLIKE"""
     performance = pd.read_csv('../performance.csv')
+    performance = performance.loc[~performance.regression.isin(['ridge', 'risk_metrics']), :]
     performance = pd.pivot(data=performance,
                            columns=['metric'],
                            values='values', index=['training_scheme', 'L', 'regression', 'model'])[['qlike']]
@@ -88,15 +88,16 @@ if __name__ == '__main__':
     trader_obj = Trader(top_performers=top_performers, bottom_performers=bottom_performers, hp=6)
     trader_obj.PnL()
     returns = pd.concat(trader_obj.returns_dd, axis=1)
-    stats = returns.agg([lambda x: x.mean()*(pd.to_timedelta('1Y')//pd.to_timedelta(trader_obj._h)),
-                         lambda x: x.std()*((pd.to_timedelta('1Y')//pd.to_timedelta(trader_obj._h))*.5)])
+    stats = returns.agg([lambda x: x.mean()*(pd.to_timedelta('365D')//pd.to_timedelta(trader_obj._h)),
+                         lambda x: x.std()*((pd.to_timedelta('365D')//pd.to_timedelta(trader_obj._h))*.5)])
     stats.index = ['mean', 'std']
     stats = stats.transpose()
-    stats = stats.assign(skew=
-                         skew(returns)*((pd.to_timedelta('1Y')//pd.to_timedelta(trader_obj._hp*trader_obj._h))**.5),
-                         kurtosis=
-                         kurtosis(returns)*((pd.to_timedelta('1Y')//pd.to_timedelta(trader_obj._hp*trader_obj._h))**.5),
-                         sharpe=stats['mean'].div(stats['std']))
+    stats = \
+        stats.assign(skew=
+                     skew(returns)*((pd.to_timedelta('365D')//pd.to_timedelta(trader_obj._hp*trader_obj._h))**.5),
+                     kurtosis=
+                     kurtosis(returns)*((pd.to_timedelta('365D')//pd.to_timedelta(trader_obj._hp*trader_obj._h))**.5),
+                     sharpe=stats['mean'].div(stats['std']))
     stats = stats.round(2).transpose()
     cumPnL = pd.concat(trader_obj.PnL_dd, axis=1)
     vwap = \
