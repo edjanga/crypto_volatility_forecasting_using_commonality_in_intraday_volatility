@@ -370,15 +370,10 @@ class TrainingScheme(object):
                         if len(kwargs['cluster']) > 1:
                             own_train, own_test = \
                                 X_train.filter(regex=f'{symbol}'), X_test.filter(regex=f'{symbol}')
-                    pdb.set_trace()
-                    try:
-                        X_train = \
-                            pd.DataFrame(rres_pca.fit_transform(X_train),
-                                         columns=columns_name_dd['pcr' == regression_type][:n_components],
-                                         index=X_train.index)
-                    except Exception as e:
-                        print(e)
-                        pdb.set_trace()
+                    X_train = \
+                        pd.DataFrame(rres_pca.fit_transform(X_train),
+                                     columns=columns_name_dd['pcr' == regression_type][:n_components],
+                                     index=X_train.index)
                     X_train = pd.concat([X_train, own_train], axis=1)
                     X_test = pd.DataFrame(rres_pca.transform(X_test),
                                           columns=columns_name_dd['pcr' == regression_type][:n_components],
@@ -435,10 +430,11 @@ class TrainingScheme(object):
             futures = [executor.submit(self.df_per_day, df=exog, date=date) for date in dates[dates.index(start):]]
             for future in concurrent.futures.as_completed(futures):
                 date, exog = future.result()
-                self.rolling_metrics_per_date(exog=exog, endog=endog, date=date, regression_type=regression_type,
-                                              transformation=transformation, **kwargs)
-                y.append(future.result().sort_index())
+                y.append(self.rolling_metrics_per_date(exog=exog, endog=endog, date=date,
+                                                       regression_type=regression_type,
+                                                       transformation=transformation, **kwargs))
             y = pd.concat(y).dropna()
+            y.sort_index(inplace=True)
             if self.__class__.__name__ != 'UAM':
                 y = TrainingScheme._factory_transformation_dd[transformation]['inverse'](y).reset_index(
                     names='timestamp')
@@ -480,7 +476,6 @@ class TrainingScheme(object):
                 table['transformation'] = transformation_dd[transformation]
                 table['regression'] = regression_type
                 table['h'] = self._h
-                pdb.set_trace()
                 training_scheme_tables[table_name][symbol] = table
 
     def add_metrics_per_symbol(self, symbol: str, df: pd.DataFrame, agg: str, transformation: str,
@@ -584,7 +579,7 @@ class ClustAM(TrainingScheme):
         if ClustAM._cluster_group is None:
             ClustAM.build_clusters(df)
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(lambda x: self.cluster_members(x), 'DOGEUSDT') for symbol in self._universe]
+            futures = [executor.submit(lambda x: self.cluster_members(x), symbol) for symbol in ['DOGEUSDT']]#self._universe
             for future in concurrent.futures.as_completed(futures):
                 symbol, member_ls = list(future.result())
                 self.add_metrics_per_symbol(symbol=symbol, df=df[member_ls], agg=agg, regression_type=regression_type,
@@ -631,19 +626,19 @@ if __name__ == '__main__':
     reader_obj = Reader()
     df = reader_obj.rv_read().iloc[:, :20]
     universe = df.columns.tolist()
-    training_scheme = 'SAM'
+    training_scheme = 'ClustAM'
     model_type = 'har'
     h = '30T'
     F = ['30T', '1H', '6H', '12H']
-    L = '6M'
+    L = '1W'
     lookback_ls = ['1D', '1W', '1M', '6M']
     lookback_ls = \
         lookback_ls[lookback_ls.index(L):1] if lookback_ls.index(L) == 0 else lookback_ls[0:lookback_ls.index(L) + 1]
     F = F + lookback_ls if model_type not in ['ar', 'risk_metrics'] else [F[0]]
-    training_scheme_factory_dd = {'SAM': SAM}
+    training_scheme_factory_dd = {'SAM': SAM, 'ClustAM': ClustAM}
     transformation = 'log'
     training_scheme_obj = training_scheme_factory_dd[training_scheme](h=h, F=F, L=L, Q='1D', model_type=model_type,
                                                                       universe=universe)
-    training_scheme_obj.add_metrics(agg='1W', transformation=transformation, regression_type='har_eq', df=df)
+    training_scheme_obj.add_metrics(agg='1W', transformation=transformation, regression_type='pcr', df=df)
 
 

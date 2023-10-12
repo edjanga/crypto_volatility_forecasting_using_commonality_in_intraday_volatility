@@ -8,7 +8,7 @@ for l in {6M,1M,1W}
   do
 #    python3 ./generate_results.py --L=$l --model=risk_metrics --training_scheme=SAM --regression=linear \
 #            --transformation=log
-    for regression_type in {lightgbm,elastic,lasso}
+    for regression_type in {lightgbm,elastic,lasso,pcr}
       do
         for model in {har_eq,har}
           do

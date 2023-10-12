@@ -6,7 +6,7 @@ source ./venv/bin/activate
 #######################################################
 for l in {6M,1M,1W}
   do
-    for regression_type in {lightgbm,elastic,lasso}
+    for regression_type in {lightgbm,elastic,lasso,pcr}
       do
         for model in {har_eq,har,ar}
           do
