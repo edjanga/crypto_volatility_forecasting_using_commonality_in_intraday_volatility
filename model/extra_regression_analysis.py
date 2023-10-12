@@ -255,7 +255,7 @@ class TrainingSchemeAnalysis:
         feature_imp_dd = {symbol: pd.DataFrame() for symbol in universe}
         for symbol in universe:
             self.feature_imp_symbol(h=h, F=F, model_type=model_type, universe=universe, symbol=symbol, Q=Q,
-                                    transformation=transformation)
+                                    transformation=transformation, training_scheme_obj=training_scheme_obj)
         feature_imp = pd.concat(feature_imp_dd.values())
         feature_imp.dropna(inplace=True)
         feature_imp = feature_imp.groupby(
