@@ -146,9 +146,9 @@ class TrainingSchemeAnalysis:
             coefficient.loc[date, 'const'], coefficient.loc[date, df.columns] = rres.intercept_, rres.coef_
         coefficient.loc[date, df.columns] = rres.coef_
 
-    # @staticmethod
-    # def df_per_day(df: pd.DataFrame, date: datetime):
-    #     return date, df.loc[(df.index.date >= date - L_train) & (df.index.date <= date)]
+    @staticmethod
+    def df_per_day(df: pd.DataFrame, date: datetime):
+        return date, df.loc[(df.index.date >= date - L_train) & (df.index.date <= date)]
 
     def coefficient_analysis(self, regression_type: str ='linear', const: bool=False):
         df = self._rv.copy()
@@ -163,10 +163,10 @@ class TrainingSchemeAnalysis:
             if self._training_scheme == 'ClustAM':
                 for cluster, member in self._ClustAM_obj._cluster_group.groups.items():
                     if len(member) > 1:
-                        futures = [executor.submit(TrainingScheme.df_per_day, df=df[list(member)], date=date)
+                        futures = [executor.submit(self.df_per_day, df=df[list(member)], date=date)
                                    for date in dates[dates.index(start):]]
             else:
-                futures = [executor.submit(TrainingScheme.df_per_day, df=df, date=date) for date in
+                futures = [executor.submit(self.df_per_day, df=df, date=date) for date in
                            dates[dates.index(start):]]
             for future in concurrent.futures.as_completed(futures):
                 date, date_df = future.result()
@@ -226,7 +226,7 @@ class TrainingSchemeAnalysis:
             start = dates[0] + L_train
         feature_imp_per_symbol = pd.DataFrame(index=dates, columns=df.columns.tolist(), data=np.nan)
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(TrainingScheme.df_per_day.df_per_day, date=date, df=df) for date
+            futures = [executor.submit(self.df_per_day, date=date, df=df) for date
                        in dates[dates.index(start):]]
             for future in concurrent.futures.as_completed(futures):
                 date, date_df = future.result()
