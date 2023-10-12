@@ -1,23 +1,16 @@
-import glob
 import os.path
-import pdb
 import typing
-
-import torch
 import pandas as pd
-from data_centre.helpers import coin_ls
 from data_centre.data import Reader
 from plotly.subplots import make_subplots
 import plotly.express as px
 import plotly.graph_objs as go
-from datetime import datetime
 import numpy as np
 import sqlite3
 from sklearn.metrics import silhouette_score
 from sklearn.cluster import KMeans
 import plotly.io as pio
 pio.kaleido.scope.mathjax = None
-import torch
 
 
 class EDA:
@@ -376,7 +369,7 @@ class PlotResults:
             fig.show()
 
     @staticmethod
-    def commonality(save: bool = True):
+    def commonality(save: bool = True) -> None:
         query = 'SELECT * FROM commonality;'
         commonality = pd.read_sql(query, con=PlotResults.db_connect_commonality, index_col='index')
         commonality.index = pd.to_datetime(commonality.index)
@@ -393,6 +386,31 @@ class PlotResults:
         fig.update_layout({'xaxis_title': '', 'yaxis_title': 'Commonality'})
         if save:
             fig.write_image(os.path.abspath(f'./plots/commonality.pdf'))
+        else:
+            fig.show()
+
+    @staticmethod
+    def first_principal_component(save: bool = True) -> None:
+        db_connect = sqlite3.connect('./data_centre/databases/pca.db')
+        first_comp_weights = pd.read_sql(con=db_connect, sql='SELECT * FROM coefficient_1st_principal_component')
+        first_comp_weights = first_comp_weights.groupby(by=[pd.Grouper(key='training_scheme'), pd.Grouper(key='L'),
+                                                            pd.Grouper(key='variable')])[['values']].mean()
+        fig = make_subplots(rows=len(first_comp_weights.index.get_level_values(0).unique()),
+                            cols=1, row_titles=first_comp_weights.index.get_level_values(0).unique().tolist(),
+                            column_titles=['First principal component - Crypto pair weights'])
+        for i, training_scheme in enumerate(first_comp_weights.index.get_level_values(0).unique().tolist()):
+            tmp = first_comp_weights.loc[first_comp_weights.index.get_level_values(0) == training_scheme, :]
+            tmp = tmp.droplevel(0, 0).reset_index(level=1)
+            bars = [
+                go.Bar(name=f'{L}', x=tmp.query(f"L == \"{L}\"").variable, y=tmp.query(f"L == \"{L}\"")['values'],
+                       marker_color=px.colors.qualitative.Plotly[idx], showlegend=i == 0,
+                       text=tmp.query(f"L == \"{L}\"")['values'], texttemplate='%{y:.4f}') for idx, L in
+                enumerate(['1W', '1M', '6M'])
+            ]  # . named_colorscales()
+            fig.add_traces(data=bars, rows=i + 1, cols=1)
+        fig.update_layout(barmode='group')
+        if save:
+            fig.write_image(os.path.abspath(f'{EDA._plots_dir}/first_components_weights.pdf'))
         else:
             fig.show()
 

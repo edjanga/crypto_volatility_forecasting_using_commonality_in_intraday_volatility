@@ -18,7 +18,7 @@ from model.feature_engineering_room import FeatureAR, FeatureHAR, FeatureHAREq, 
 import numpy as np
 import optuna
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from model.lab import qlike_score, EarlyStopping
+from model.lab import qlike_score#, EarlyStopping
 from optuna.samplers import RandomSampler
 
 
@@ -253,6 +253,10 @@ class TrainingScheme(object):
         return stats_condition
 
     @staticmethod
+    def df_per_day(df: pd.DataFrame, date: datetime):
+        return date, df.loc[(df.index.date >= date - L_train) & (df.index.date <= date)]
+
+    @staticmethod
     def volatility_period(df: pd.DataFrame) -> pd.Series:
         rv_mkt = pd.DataFrame(df.mean(axis=1).rename('RV_MKT')).resample('1D').sum()
         rv_mkt = rv_mkt.assign(vol_regime=
@@ -424,11 +428,15 @@ class TrainingScheme(object):
         L_train = relativedelta(minutes=TrainingScheme.L_shift_dd[self._L] * 5)
         start = dates[0] + L_train
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(self.rolling_metrics_per_date,
-                                       exog=exog, endog=endog, date=date, regression_type=regression_type,
-                                       transformation=transformation, **kwargs)
-                       for date in dates[dates.index(start):]]
+            # futures = [executor.submit(self.rolling_metrics_per_date,
+            #                            exog=exog, endog=endog, date=date, regression_type=regression_type,
+            #                            transformation=transformation, **kwargs)
+            #            for date in dates[dates.index(start):]]
+            futures = [executor.submit(self.df_per_day, df=exog, date=date) for date in dates[dates.index(start):]]
             for future in concurrent.futures.as_completed(futures):
+                date, exog = future.result()
+                self.rolling_metrics_per_date(exog=exog, endog=endog, date=date, regression_type=regression_type,
+                                              transformation=transformation, **kwargs)
                 y.append(future.result().sort_index())
             y = pd.concat(y).dropna()
             if self.__class__.__name__ != 'UAM':
@@ -465,14 +473,14 @@ class TrainingScheme(object):
                                       'mse': self._training_scheme_mse_dd, 'y': self._training_scheme_y_dd}
             transformation_dd = {'log': 'log', None: 'level'}
             for table_name, table in table_dd.items():
-                if table_name != 'y':
-                    table['symbol'] = symbol
-                    table['model'] = self._model_type
+                table['symbol'] = symbol
+                table['model'] = self._model_type
                 table['L'] = self._L
                 table['training_scheme'] = self.__class__.__name__
                 table['transformation'] = transformation_dd[transformation]
                 table['regression'] = regression_type
                 table['h'] = self._h
+                pdb.set_trace()
                 training_scheme_tables[table_name][symbol] = table
 
     def add_metrics_per_symbol(self, symbol: str, df: pd.DataFrame, agg: str, transformation: str,
@@ -572,30 +580,6 @@ class ClustAM(TrainingScheme):
         exog = TrainingScheme._factory_model_type_dd[self._model_type].builder(F=self._F, df=df, symbol=symbol)
         return exog
 
-    # def add_metrics(self, regression_type: str, transformation: str, agg: str, df: pd.DataFrame) -> None:
-    #     # for _, symbol in enumerate(self._universe):
-    #     #     if ClustAM._cluster_group is None:
-    #     #         ClustAM.build_clusters(df)
-    #     #     exog = self.build_exog(df=df, symbol=symbol, regression_type=regression_type, transformation=transformation)
-    #     #     self.add_metrics_per_symbol(symbol=symbol, df=exog, agg=agg, regression_type=regression_type,
-    #     #                                 transformation=transformation)
-    #
-    #     #exog = self.build_exog(df=df, symbol=symbol, regression_type=regression_type, transformation=transformation)
-    #     if ClustAM._cluster_group is None:
-    #         ClustAM.build_clusters(df)
-    #     with concurrent.futures.ThreadPoolExecutor() as executor:
-    #         # futures = [executor.submit(self.build_exog, df=df, symbol=symbol, regression_type=regression_type,
-    #         #                            transformation=transformation) for symbol in self._universe]
-    #         futures = [executor.submit(self.cluser_members, symbol='DOGEUSDT') for symbol in self._universe]
-    #         for future in concurrent.futures.as_completed(futures):
-    #             # exog, symbol = future.result()
-    #             member_ls = future.result()
-    #             pdb.set_trace()
-    #             # self.add_metrics_per_symbol_copy(symbol=symbol, df=exog, agg=agg, regression_type=regression_type,
-    #             #                                  transformation=transformation)
-    #             self.add_metrics_per_symbol_copy(symbol=member_ls, df=df, agg=agg, regression_type=regression_type,
-    #                                              transformation=transformation)
-
     def add_metrics(self, regression_type: str, transformation: str, agg: str, df: pd.DataFrame) -> None:
         if ClustAM._cluster_group is None:
             ClustAM.build_clusters(df)
@@ -609,6 +593,10 @@ class ClustAM(TrainingScheme):
     @property
     def clusters_trained(self):
         return self._clusters_trained
+
+    @property
+    def cluster_group(self):
+        return self._cluster_group
 
 
 class CAM(TrainingScheme):
@@ -636,7 +624,6 @@ class CAM(TrainingScheme):
         #                                regression_type=regression_type, transformation=transformation)
         #                for symbol in self._universe]
         #     for future in concurrent.futures.as_completed(futures):
-
 
 
 if __name__ == '__main__':

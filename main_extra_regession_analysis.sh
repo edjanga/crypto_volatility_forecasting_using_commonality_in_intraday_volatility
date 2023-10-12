@@ -8,6 +8,6 @@ source ./venv/bin/activate
 #  do
 #    python3 ./generate_extra_regression_analysis.py --analysis=$analysis
 #  done
-analysis=coefficient_analysis
+analysis=feature_importance
 python3 ./generate_extra_regression_analysis.py --analysis=$analysis
 deactivate
