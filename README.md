@@ -8,6 +8,7 @@
 <li>generate/: Directory containing all generate.py scripts used to generate results in .sh files.</li>
 <li>model/: Directory containing all the source code used to fit the models, handling feature engineering, and extra analysis presented in this paper. </li>
 <li>figures/: Directory containing all the figures reporting the results presented in this paper. </li>
-<li>trading/: Directory containing scripts used to backtest the trading strategies presented in the paper.</li>
+<li>trading/: Directory containing scripts used to backtest the trading strategies presented in the paper. </li>
+<li>sql_scripts/: Directory containing SQL Lite scripts used to modify and generate tables (use with caution). </li>
 </ul>
 
