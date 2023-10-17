@@ -1,6 +1,6 @@
 #!/bin/bash
 clear
-source ./venv/bin/activate
+source ../venv/bin/activate
 #######################################################
 ## Model performance SAM.
 #######################################################

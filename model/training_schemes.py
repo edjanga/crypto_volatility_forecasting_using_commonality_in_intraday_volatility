@@ -598,7 +598,7 @@ class CAM(TrainingScheme):
         return exog
 
     def add_metrics(self, regression_type: str, transformation: str, agg: str, df: pd.DataFrame, ** kwargs) -> None:
-        for symbol in self._universe[:2]:
+        for symbol in self._universe:
             print(f'[Data Process]: Process for {symbol} has started...')
             self.add_metrics_per_symbol(symbol=symbol, df=df, agg=agg, regression_type=regression_type,
                                         transformation=transformation)

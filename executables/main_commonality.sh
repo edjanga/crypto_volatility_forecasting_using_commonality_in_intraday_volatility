@@ -1,6 +1,6 @@
 #!/bin/bash
 clear
-source ./venv/bin/activate
+source ../venv/bin/activate
 #######################################################
 ## Commonality for different time horizons.
 #######################################################
