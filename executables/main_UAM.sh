@@ -15,7 +15,7 @@ for l in {1W,1M,6M}
     do
       for model in {ar,har,har_eq}
         do
-          python3 ./generate_results.py --L=$l --model=$model --training_scheme=UAM \
+          python3 ./generate/generate_results.py --L=$l --model=$model --training_scheme=UAM \
           --regression=$regression_type --transformation=log
         done
     done

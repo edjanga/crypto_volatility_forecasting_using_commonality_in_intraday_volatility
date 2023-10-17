@@ -1,4 +1,4 @@
-from plots.maker_copy import EDA
+from figures.maker_copy import EDA
 import plotly.io as pio
 pio.kaleido.scope.mathjax = None
 
@@ -10,4 +10,4 @@ if __name__ == '__main__':
     eda_obj.daily_mean_correlation_matrix()
     eda_obj.daily_pairwise_correlation()
     eda_obj.optimal_clusters()
-    print('[EDA PLOTS]: All EDA plots have just been generated.')
+    print('[EDA Figures]: All EDA Figures have just been generated.')

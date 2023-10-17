@@ -68,7 +68,7 @@ class Plot:
                                            marker_color='#34A853', opacity=0.75), row=row, col=col)
         fig.update_layout(title='Returns and Realised Volatility: Distributions (5min bucket).',
                           height=1500, width=1200, showlegend=False)
-        fig.write_image(os.path.abspath('./plots/distribution_returns_rv.png'))
+        fig.write_image(os.path.abspath('./figures/distribution_returns_rv.png'))
 
     def daily_realised_vol(self) -> None:
         daily_realised_vol_df = pd.DataFrame()
@@ -526,7 +526,7 @@ class Plot:
     @staticmethod
     def tensor_decomposition(log: bool = False) -> None:
         log_extension_dd = {True: '_log', False: ''}
-        f = open(os.path.abspath(f'../plots/tmp/tensor{log_extension_dd[log]}.pkl'), 'rb')
+        f = open(os.path.abspath(f'../figures/tmp/tensor{log_extension_dd[log]}.pkl'), 'rb')
         tensor = pickle.load(f)
         f.close()
         fig = \
@@ -569,7 +569,7 @@ class Plot:
                 #     [tensor.modes[-1].index[i] for _, i in enumerate(heatmap_U.dendrogram_col.reordered_ind)]
                 plt.setp(heatmap_U.ax_heatmap.xaxis.get_majorticklabels(), fontsize=10)
                 plt.setp(heatmap_U.ax_heatmap.yaxis.get_majorticklabels(), fontsize=10)
-                plt.savefig(os.path.abspath(f'../plots/heatmap_clustered_row{row}'))
+                plt.savefig(os.path.abspath(f'../figures/heatmap_clustered_row{row}'))
             bar_similarity_U = np.copy(similarity_U)
             bar_similarity_V = np.copy(similarity_V)
             bar_similarity_U[bar_similarity_U == 1] = np.nan
@@ -725,7 +725,7 @@ class PlotResults:
         fig_title = f'Coefficient {L} {cross} {transformation} {regression_type}: Bar plot'
         fig = px.bar(coefficient, x='params', y='value', color='model', barmode='group', title=fig_title)
         if save:
-            fig.write_image(os.path.abspath(f'./plots/coefficient_{L}_{cross}_{transformation}_'
+            fig.write_image(os.path.abspath(f'./figures/coefficient_{L}_{cross}_{transformation}_'
                                             f'{regression_type}.png'))
         else:
             fig.show()
@@ -779,7 +779,7 @@ class PlotResults:
                                  line=dict(color='black', width=1, dash='dash'), showlegend=False),  row=1, col=1)
         if save:
             fig.write_image(os.path.abspath(
-                f'./plots/rolling_metrics_{L}_{cross}_{transformation}_{regression_type}.png'))
+                f'./figures/rolling_metrics_{L}_{cross}_{transformation}_{regression_type}.png'))
         else:
             fig.show()
 
@@ -854,7 +854,7 @@ class PlotResults:
         mean_dd = {True:'mean', False: 'witout_mean'}
         if save:
             fig.write_image(
-                os.path.abspath(f'./plots/rolling_metrics_bar_plot_{L}_{cross}_{transformation}_{regression_type}.png'))
+                os.path.abspath(f'./figures/rolling_metrics_bar_plot_{L}_{cross}_{transformation}_{regression_type}.png'))
         else:
             fig.show()
 
@@ -891,7 +891,7 @@ class PlotResults:
         fig.update_xaxes(title_text='Observed')
         fig.update_layout(height=1500, width=1200, title={'text': fig_title})
         if save:
-            fig.write_image(os.path.abspath(f'./plots/scatter_plot_{L}_{cross}_'
+            fig.write_image(os.path.abspath(f'./figures/scatter_plot_{L}_{cross}_'
                                             f'{transformation}_{regression_type}.png'))
         else:
             fig.show()
@@ -935,7 +935,7 @@ class PlotResults:
         if save:
             fig.write_image(
             os.path.abspath(
-            f'./plots/distributions_y_vs_y_hat_{L}_{cross}_{transformation}_{regression_type}.png')
+            f'./figures/distributions_y_vs_y_hat_{L}_{cross}_{transformation}_{regression_type}.png')
             )
         else:
             fig.show()
@@ -953,7 +953,7 @@ class PlotResults:
         fig = px.histogram(outliers, x='values', color='L')
         fig.update_layout(height=800, width=1200, title={'text': fig_title}, barmode='overlay')
         if save:
-            fig.write_image(os.path.abspath(f'./plots/distributions_outliers.png'))
+            fig.write_image(os.path.abspath(f'./figures/distributions_outliers.png'))
         else:
             fig.show()
 

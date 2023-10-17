@@ -1,4 +1,6 @@
+import concurrent.futures
 import os.path
+import pdb
 import typing
 import pandas as pd
 from data_centre.data import Reader
@@ -10,11 +12,13 @@ import sqlite3
 from sklearn.metrics import silhouette_score
 from sklearn.cluster import KMeans
 import plotly.io as pio
+import torch
 pio.kaleido.scope.mathjax = None
+import itertools
 
 
 class EDA:
-    _plots_dir = os.path.abspath(__file__).replace('/plots/maker_copy.py', '/plots')
+    _figures_dir = os.path.abspath(__file__).replace('/figures/maker_copy.py', '/figures')
     reader_object = Reader()
     rv = reader_object.rv_read()
     returns = reader_object.returns_read()
@@ -38,8 +42,8 @@ class EDA:
         fig.update_xaxes(title='Number of clusters')
         fig.update_yaxes(title='Silhouette score')
         fig.update_layout(title='Optimal number of clusters: Analysis')
-        fig.write_image(os.path.abspath(f'{EDA._plots_dir}/n_clusters.pdf'))
-        print(f'[Plots]: Selection optimal cluster plot has been generated.')
+        fig.write_image(os.path.abspath(f'{EDA._figures_dir}/n_clusters.pdf'))
+        print(f'[figures]: Selection optimal cluster plot has been generated.')
 
     def daily_rv(self) -> None:
         daily_rv_df = pd.DataFrame()
@@ -66,7 +70,7 @@ class EDA:
                                  line_color='blue', line={'width': 3}, showlegend=False))
         fig.update_xaxes(tickangle=45)
         fig.update_layout(height=500, width=800)
-        fig.write_image(os.path.abspath(f'{EDA._plots_dir}/daily_rv.pdf'))
+        fig.write_image(os.path.abspath(f'{EDA._figures_dir}/daily_rv.pdf'))
 
     def intraday_rv(self) -> None:
         rv_df = np.log(self.rv.resample('30T').sum())
@@ -118,7 +122,7 @@ class EDA:
                       annotation_position='bottom right')
         fig.update_xaxes(tickangle=45)
         fig.update_layout(height=500, width=800)
-        fig.write_image(os.path.abspath('./plots/intraday_rv.pdf'))
+        fig.write_image(os.path.abspath('./figures/intraday_rv.pdf'))
 
     def daily_mean_correlation_matrix(self) -> None:
         symbols = self.rv.columns.tolist()
@@ -129,7 +133,7 @@ class EDA:
         corr_df = pd.DataFrame(data=corr.detach().numpy(), index=symbols, columns=symbols)
         fig = go.Figure(data=go.Heatmap(z=corr_df.values, x=corr_df.columns, y=corr_df.columns, colorscale='Blues'))
         fig.update_layout(title='Daily pairwise RV correlation mean.')
-        fig.write_image(os.path.abspath(f'{EDA._plots_dir}/daily_mean_corr_rv.pdf'))
+        fig.write_image(os.path.abspath(f'{EDA._figures_dir}/daily_mean_corr_rv.pdf'))
 
     def daily_pairwise_correlation(self) -> None:
         corr_df = self.rv.resample('1D').sum().rolling(3).corr().dropna()
@@ -141,7 +145,7 @@ class EDA:
                            histnorm='probability')
         fig.add_vline(x=mean_corr, line_color='orange')
         fig.update_yaxes(title='')
-        fig.write_image(os.path.abspath(f'{EDA._plots_dir}/daily_pairwise_correlation_distribution.pdf'))
+        fig.write_image(os.path.abspath(f'{EDA._figures_dir}/daily_pairwise_correlation_distribution.pdf'))
 
     def boxplot(self):
 
@@ -160,11 +164,11 @@ class EDA:
             fig.add_trace(go.Box(y=tmp_rv.query(f'symbol == \"{symbol}\"')['values'].tolist(),
                                  name=symbol), row=2, col=1)
         fig.update_layout(showlegend=False)
-        fig.write_image(os.path.abspath(f'{EDA._plots_dir}/boxplot.png'))
+        fig.write_image(os.path.abspath(f'{EDA._figures_dir}/boxplot.png'))
 
 
 class PlotResults:
-    _data_centre_dir = os.path.abspath(__file__).replace('/plots/maker_copy.py', '/data_centre')
+    _data_centre_dir = os.path.abspath(__file__).replace('/figures/maker_copy.py', '/data_centre')
     db_connect_coefficient = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/coefficients.db'))
     db_connect_mse = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/mse.db'))
     db_connect_qlike = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/qlike.db'))
@@ -173,9 +177,15 @@ class PlotResults:
     db_connect_commonality = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/commonality.db'))
     db_connect_rolling_metrics = \
         sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/rolling_metrics.db'))
+    db_feature_importance = sqlite3.connect(
+        database=os.path.abspath(f'{_data_centre_dir}/databases/feature_importance.db'), check_same_thread=False
+    )
+    db_pca = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/pca.db'), check_same_thread=False)
     #db_connect_correlation = sqlite3.connect(database=os.path.abspath('./data_centre/databases/correlation.db'))
     colors_ls = px.colors.qualitative.Plotly
-    models_ls = ['ar', 'risk_metrics', 'har', 'har_eq']
+    _models_ls = ['ar', 'har', 'har_eq'] #'risk_metrics'
+    _training_scheme_ls = ['ClustAM', 'CAM']
+    _L = ['1W', '1M', '6M']
 
     def __init__(self):
         pass
@@ -199,7 +209,7 @@ class PlotResults:
         fig_title = f'Coefficient {L} {cross} {transformation} {regression_type}: Bar plot'
         fig = px.bar(coefficient, x='params', y='value', color='model', barmode='group', title=fig_title)
         if save:
-            fig.write_image(os.path.abspath(f'./plots/plots/coefficient_{L}_{cross}_{transformation}_'
+            fig.write_image(os.path.abspath(f'./figures/figures/coefficient_{L}_{cross}_{transformation}_'
                                             f'{regression_type}.png'))
         else:
             fig.show()
@@ -239,7 +249,7 @@ class PlotResults:
         fig.update_layout(height=1500, width=1200, title={'text': fig_title})
         if save:
             fig.write_image(os.path.abspath(
-                f'./plots/{L}/{training_scheme}/{transformation}/'
+                f'./figures/{L}/{training_scheme}/{transformation}/'
                 f'rolling_metrics_{training_scheme}_{L}_{transformation}_{regression_type}.png'))
         else:
             fig.show()
@@ -294,7 +304,7 @@ class PlotResults:
         fig.update_layout(height=900, width=1200, title={'text': fig_title}, barmode='group')
         if save:
             fig.write_image(
-                os.path.abspath(f'./plots/{L}/{training_scheme}/{transformation}/'
+                os.path.abspath(f'./figures/{L}/{training_scheme}/{transformation}/'
                                 f'rolling_metrics_bar_plot_{training_scheme}_{L}_'
                                 f'{transformation}_{regression_type}.png'))
         else:
@@ -327,7 +337,7 @@ class PlotResults:
         fig.update_xaxes(title_text='Observed')
         fig.update_layout(height=1500, width=1200, title={'text': fig_title})
         if save:
-            fig.write_image(os.path.abspath(f'./plots/{L}/{training_scheme}/{transformation}/'
+            fig.write_image(os.path.abspath(f'./figures/{L}/{training_scheme}/{transformation}/'
                                             f'scatter_plot_{training_scheme}'
                                             f'_{L}_{transformation}_{regression_type}.png'))
         else:
@@ -363,7 +373,7 @@ class PlotResults:
         fig.update_traces(opacity=0.75)
         if save:
             fig.write_image(os.path.abspath(
-                f'./plots/{L}/{training_scheme}/{transformation}/distributions_y_vs_y_hat_{L}_{training_scheme}_'
+                f'./figures/{L}/{training_scheme}/{transformation}/distributions_y_vs_y_hat_{L}_{training_scheme}_'
                 f'{transformation}_{regression_type}.png'))
         else:
             fig.show()
@@ -371,80 +381,83 @@ class PlotResults:
     @staticmethod
     def commonality(save: bool = True) -> None:
         query = 'SELECT * FROM commonality;'
-        commonality = pd.read_sql(query, con=PlotResults.db_connect_commonality, index_col='index')
-        commonality.index = pd.to_datetime(commonality.index)
-        commonality.dropna(inplace=True)
+        commonality = pd.read_sql(query, con=PlotResults.db_connect_commonality, index_col='index',
+                                  columns=['index', 'L', 'values'])
+        commonality.index = pd.to_datetime(commonality.index, utc=True)
         commonality = commonality.loc[commonality.index.isin(commonality.query('L == "6M"').index), :]
-        #commonality_group = commonality.groupby(by='L', group_keys=True)
-        #commonality = commonality_group.apply(lambda x: x.resample('6M').mean()).iloc[:-1, :]
-        commonality = commonality.reset_index().set_index('index')
-        commonality = commonality.rename(columns={'L': 'L_train'})
-        commonality.iloc[:, 0] = [f'{L.lower()}' for L in commonality.iloc[:, 0]]
-        commonality.index.name = None
+        fig = px.line(commonality, y='values', color='L')
+        commonality = commonality.rename(columns={'L': r'L_train'})
         fig_title = r'Commonality for different lookback windows'
-        fig = px.line(commonality, y='values', color='L_train', title=fig_title)
+        fig = px.line(commonality, y='values', color=r'L_train', title=fig_title)
         fig.update_layout({'xaxis_title': '', 'yaxis_title': 'Commonality'})
         if save:
-            fig.write_image(os.path.abspath(f'./plots/commonality.pdf'))
+            fig.write_image(os.path.abspath(f'./figures/commonality.pdf'))
         else:
             fig.show()
 
     @staticmethod
     def first_principal_component(save: bool = True) -> None:
-        db_connect = sqlite3.connect('./data_centre/databases/pca.db')
-        first_comp_weights = pd.read_sql(con=db_connect, sql='SELECT * FROM coefficient_1st_principal_component')
+        first_comp_weights = pd.read_sql(con=PlotResults.db_pca,
+                                         sql='SELECT * FROM coefficient_1st_principal_component')
         first_comp_weights = first_comp_weights.groupby(by=[pd.Grouper(key='training_scheme'), pd.Grouper(key='L'),
                                                             pd.Grouper(key='variable')])[['values']].mean()
         fig = make_subplots(rows=len(first_comp_weights.index.get_level_values(0).unique()),
                             cols=1, row_titles=first_comp_weights.index.get_level_values(0).unique().tolist(),
-                            column_titles=['First principal component - Crypto pair weights'])
+                            column_titles=['First principal component - Crypto pair weights'],
+                            vertical_spacing=.3)
         for i, training_scheme in enumerate(first_comp_weights.index.get_level_values(0).unique().tolist()):
             tmp = first_comp_weights.loc[first_comp_weights.index.get_level_values(0) == training_scheme, :]
             tmp = tmp.droplevel(0, 0).reset_index(level=1)
             bars = [
                 go.Bar(name=f'{L}', x=tmp.query(f"L == \"{L}\"").variable, y=tmp.query(f"L == \"{L}\"")['values'],
-                       marker_color=px.colors.qualitative.Plotly[idx], showlegend=i == 0,
-                       text=tmp.query(f"L == \"{L}\"")['values'], texttemplate='%{y:.4f}') for idx, L in
+                       marker_color=px.colors.qualitative.Plotly[idx], showlegend=i == 0) for idx, L in
                 enumerate(['1W', '1M', '6M'])
-            ]  # . named_colorscales()
+            ]  #
+            # text=tmp.query(f"L == \"{L}\"")['values'], texttemplate='%{y:.4f}'
             fig.add_traces(data=bars, rows=i + 1, cols=1)
+        fig.update_xaxes(tickangle=45)
         fig.update_layout(barmode='group')
         if save:
-            fig.write_image(os.path.abspath(f'{EDA._plots_dir}/first_components_weights.pdf'))
+            fig.write_image(os.path.abspath(f'{EDA._figures_dir}/first_components_weights.pdf'))
         else:
             fig.show()
 
+    @staticmethod
+    def feature_importance(save: bool = True) -> None:
+        feature_importance = list()
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(pd.read_sql, con=PlotResults.db_feature_importance,
+                                       sql=f'SELECT * FROM \"{name}\"',
+                                       index_col='feature') for name in PlotResults._training_scheme_ls]
+            for future in concurrent.futures.as_completed(futures):
+                if future.exception() is None:
+                    table = future.result()
+                    feature_importance.append(table)
+        feature_importance = pd.concat(feature_importance)
+        feature_importance = \
+            feature_importance.groupby(by=[pd.Grouper(level='feature'),
+                                           pd.Grouper(key='model_type'),
+                                           pd.Grouper(key='training_scheme')]).apply(lambda x: x.importance.mean())
+        feature_importance = feature_importance.groupby(by=[pd.Grouper(level='feature'),
+                                                            pd.Grouper(level='training_scheme')]).mean()
+        feature_importance = \
+            feature_importance.groupby(by=pd.Grouper(level='training_scheme')).apply(
+                lambda x: x.sort_values(ascending=False)[:30]
+            )
+        feature_importance = feature_importance.droplevel(axis=0, level=2)
+        fig = make_subplots(cols=len(PlotResults._training_scheme_ls),
+                            rows=1, column_titles=PlotResults._training_scheme_ls)
+        for i, training_scheme in enumerate(PlotResults._training_scheme_ls):
+            tmp = feature_importance[feature_importance.index.get_level_values(0) == training_scheme].copy()
+            tmp.sort_values(inplace=True, ascending=True)
+            fig.add_traces(data=go.Bar(x=tmp.values.tolist(), y=tmp.index.get_level_values(1), showlegend=False,
+                                       orientation='h'),
+                           rows=1, cols=i+1) #marker={'color': tmp.values.tolist(), 'colorscale': 'Rainbow'},
+        fig.update_layout(title='Feature importance: Top 30')
+        fig.show()
+        pdb.set_trace()
+
 
 if __name__ == '__main__':
-    eda_obj = EDA()
-    eda_obj.daily_pairwise_correlation()
-
-    # performance = pd.read_csv('./performance.csv',
-    #                           index_col=['training_scheme', 'L', 'regression', 'model'])
-    # performance = performance.query('metric == "qlike"')
-    # performance = performance[['metric', 'values']]
-    # performance = performance.groupby(by=[performance.index.get_level_values(0),
-    #                                       performance.index.get_level_values(1),
-    #                                       performance.index.get_level_values(2)])
-    # top_performers = performance.apply(lambda x: x['values'].idxmin())
-    # rolling_metrics = pd.read_csv('./rolling_metrics.csv',
-    #                               index_col=['training_scheme', 'L', 'regression', 'model'])
-    # rolling_metrics = rolling_metrics.loc[rolling_metrics.index.isin(top_performers.values), :]
-    # rolling_metrics = \
-    #     rolling_metrics.assign(regression_model=['_'.join((training_scheme, L, regression, model)) for training_scheme,
-    #     L, regression, model in zip(rolling_metrics.index.get_level_values(0),
-    #                                 rolling_metrics.index.get_level_values(1),
-    #                                 rolling_metrics.index.get_level_values(-2),
-    #                                 rolling_metrics.index.get_level_values(-1))])
-    # rolling_metrics = rolling_metrics.reset_index().set_index('timestamp')
-    # for L in ['1D', '1W', '1M']:
-    #     fig1 = px.line(data_frame=rolling_metrics.query(f'L == \"{L}\" & metric=="r2"').sort_index(level=0), y='values',
-    #                    color='regression_model', title=f'Best performing {L} qlike model - Rolling R2')
-    #     fig2 = px.line(data_frame=rolling_metrics.query(f'L == \"{L}\" & metric=="mse"').sort_index(level=0),
-    #                    y='values', color='regression_model', title=f'Best performing {L} qlike model - Rolling MSE')
-    #     fig3 = px.line(data_frame=rolling_metrics.query(f'L == \"{L}\" & metric=="qlike"').sort_index(level=0),
-    #                    y='values', color='regression_model',
-    #                    title=f'Best performing {L} qlike model - Rolling QLIKE')
-    #     for fig in [fig1, fig2, fig3]:
-    #         fig.show()
-
+    plot_result_obj = PlotResults()
+    plot_result_obj.feature_importance()

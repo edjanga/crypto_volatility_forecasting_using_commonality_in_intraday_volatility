@@ -119,6 +119,6 @@ if __name__ == '__main__':
     fig.add_hline(y=0, line_width=1, line_dash='dash', line_color='black')
     fig.update_xaxes(tickangle=45, title='Date')
     fig.update_yaxes(title='Cumulative PnL')
-    fig.write_image(os.path.abspath(f'../plots/cum_PnL.pdf'))
+    fig.write_image(os.path.abspath(f'../figures/cum_PnL.pdf'))
 
 

@@ -114,10 +114,3 @@ class Reader:
         correlation.name = 'CORR'
         correlation = pd.DataFrame(correlation)
         return correlation
-
-
-if __name__ == '__main__':
-    reader_obj = Reader()
-    #prices = reader_obj.prices_read(symbol=['BTCUSDT', 'ETHUSDT'])
-    reader_obj.rv_read()
-    pdb.set_trace()

@@ -150,6 +150,14 @@ class TrainingSchemeAnalysis:
     def df_per_day(df: pd.DataFrame, date: datetime):
         return date, df.loc[(df.index.date >= date - L_train) & (df.index.date <= date)]
 
+    @staticmethod
+    def size_cluster(clust_am_obj: ClustAM, feature: str) -> float:
+        universe_size = sum(len(member) for member in clust_am_obj.cluster_group.groups.values())
+        for _, member in clust_am_obj.cluster_group.groups.items():
+            if feature in list(member):
+                return len(member)/universe_size
+        return universe_size
+
     def coefficient_analysis(self, regression_type: str ='linear', const: bool=False):
         df = self._rv.copy()
         if self._training_scheme == 'ClustAM':
@@ -257,6 +265,11 @@ class TrainingSchemeAnalysis:
             self.feature_imp_symbol(h=h, F=F, model_type=model_type, universe=universe, symbol=symbol, Q=Q,
                                     transformation=transformation, training_scheme_obj=training_scheme_obj)
         feature_imp = pd.concat(feature_imp_dd.values())
+        if self._training_scheme == 'ClustAM':
+            feature_s = pd.Series(feature_imp.feature.str.split('_').apply(lambda x: x[0]), index=feature_imp.index)
+            feature_imp.loc[:, 'importance'] = feature_imp.loc[:, 'importance']*feature_s
+            pdb.set_trace()
+        """ Multiply by normalizer factor, i.e. len(cluster) / len(univers) """
         feature_imp.dropna(inplace=True)
         feature_imp = feature_imp.groupby(
             by=[pd.Grouper(key='feature')]).agg(

@@ -1,18 +1,18 @@
 import os.path
 import pdb
 import typing
-from plots.maker_copy import PlotResults
+from figures.maker_copy import PlotResults
 import argparse
 import pandas as pd
 
 if __name__ == '__main__':
     ####################################################################################################################
-    ### Save plots
+    ### Save figures
     ####################################################################################################################
     parser = argparse.ArgumentParser(description='Model Lab: Fit and store model results of research project 1.')
     parser.add_argument('--training_scheme', default=False, help='Training scheme under which models are trained.',
                         type=str)
-    parser.add_argument('--save', default=True, help='Whether to save plots or not.', type=bool)
+    parser.add_argument('--save', default=True, help='Whether to save figures or not.', type=bool)
     parser.add_argument('--models', default=['har', 'har_eq', 'har_cdr', 'har_csr', 'har_universal'],
                         help='List of models to fit.')
     parser.add_argument('--L', default='1D', help='Lookback window.')
@@ -28,12 +28,12 @@ if __name__ == '__main__':
     regression_type = args.regression_type
     transformation_dd = {None: 'level', 'log': 'log'}
     plot_maker_obj = PlotResults
-    if not os.path.exists(f'./plots/{args.L}/'):
-        os.mkdir(f'./plots/{args.L}/')
-    if not os.path.exists(f'./plots/{args.L}/{args.training_scheme}/'):
-        os.mkdir(f'./plots/{args.L}/{args.training_scheme}/')
-    if not os.path.exists(f'./plots/{args.L}/{args.training_scheme}/{args.transformation}/'):
-        os.mkdir(f'./plots/{args.L}/{args.training_scheme}/{args.transformation}/')
+    if not os.path.exists(f'./figures/{args.L}/'):
+        os.mkdir(f'./figures/{args.L}/')
+    if not os.path.exists(f'./figures/{args.L}/{args.training_scheme}/'):
+        os.mkdir(f'./figures/{args.L}/{args.training_scheme}/')
+    if not os.path.exists(f'./figures/{args.L}/{args.training_scheme}/{args.transformation}/'):
+        os.mkdir(f'./figures/{args.L}/{args.training_scheme}/{args.transformation}/')
 
     plot_maker_obj.commonality(transformation=transformation_dd[args.transformation], save=args.save)
     # plot_maker_obj.distribution(L=args.L, training_scheme=args.training_scheme,
@@ -63,4 +63,4 @@ if __name__ == '__main__':
     # except pd.errors.DatabaseError:
     #     pass
     if save:
-        print(f'[Plots]: All plots with {args.L} lookback window have been generated and saved.')
+        print(f'[figures]: All figures with {args.L} lookback window have been generated and saved.')

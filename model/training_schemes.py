@@ -423,10 +423,6 @@ class TrainingScheme(object):
         L_train = relativedelta(minutes=TrainingScheme.L_shift_dd[self._L] * 5)
         start = dates[0] + L_train
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            # futures = [executor.submit(self.rolling_metrics_per_date,
-            #                            exog=exog, endog=endog, date=date, regression_type=regression_type,
-            #                            transformation=transformation, **kwargs)
-            #            for date in dates[dates.index(start):]]
             futures = [executor.submit(self.df_per_day, df=exog, date=date) for date in dates[dates.index(start):]]
             for future in concurrent.futures.as_completed(futures):
                 date, exog = future.result()
@@ -506,8 +502,8 @@ class TrainingScheme(object):
         #     table_dd.update({'tstats': tstats, 'pvalues': pvalues, 'coefficient': coefficient})
         count = 1
         for table_name, table in table_dd.items():
-            table.drop('symbol', inplace=True, axis=1)
             if table_name != 'y':
+                table.drop('symbol', inplace=True, axis=1)
                 table = table.reset_index(level=0)
             table = pd.concat([table, rv_mkt], axis=1).ffill().dropna()
             table.to_sql(if_exists='append', con=con_dd[table_name], name=f'{table_name}_{self._L}')
@@ -579,7 +575,7 @@ class ClustAM(TrainingScheme):
         if ClustAM._cluster_group is None:
             ClustAM.build_clusters(df)
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(lambda x: self.cluster_members(x), symbol) for symbol in ['DOGEUSDT']]#self._universe
+            futures = [executor.submit(lambda x: self.cluster_members(x), symbol) for symbol in self._universe]
             for future in concurrent.futures.as_completed(futures):
                 symbol, member_ls = list(future.result())
                 self.add_metrics_per_symbol(symbol=symbol, df=df[member_ls], agg=agg, regression_type=regression_type,
@@ -601,44 +597,10 @@ class CAM(TrainingScheme):
         exog = TrainingScheme._factory_model_type_dd[self._model_type].builder(F=self._F, df=df, symbol=df.columns)
         return exog
 
-    # def add_metrics(self, regression_type: str, transformation: str, agg: str, df: pd.DataFrame, ** kwargs) -> None:
-    #     #for symbol in self._universe:
-    #     with concurrent.futures.ThreadPoolExecutor() as executor:
-    #         futures = [executor.submit(self.add_metrics_per_symbol, symbol=symbol, df=df, agg=agg,
-    #                                    regression_type=regression_type, transformation=transformation)
-    #                    for symbol in self._universe]
-
     def add_metrics(self, regression_type: str, transformation: str, agg: str, df: pd.DataFrame, ** kwargs) -> None:
-        for symbol in self._universe:
-            print(f'[DATA PROCESS]: Process for {symbol} has started...')
+        for symbol in self._universe[:2]:
+            print(f'[Data Process]: Process for {symbol} has started...')
             self.add_metrics_per_symbol(symbol=symbol, df=df, agg=agg, regression_type=regression_type,
                                         transformation=transformation)
-
-        # with concurrent.futures.ThreadPoolExecutor() as executor:
-        #     futures = [executor.submit(self.add_metrics_per_symbol_copy, symbol=symbol, df=df, agg=agg,
-        #                                regression_type=regression_type, transformation=transformation)
-        #                for symbol in self._universe]
-        #     for future in concurrent.futures.as_completed(futures):
-
-
-if __name__ == '__main__':
-
-    reader_obj = Reader()
-    df = reader_obj.rv_read().iloc[:, :20]
-    universe = df.columns.tolist()
-    training_scheme = 'ClustAM'
-    model_type = 'har'
-    h = '30T'
-    F = ['30T', '1H', '6H', '12H']
-    L = '1W'
-    lookback_ls = ['1D', '1W', '1M', '6M']
-    lookback_ls = \
-        lookback_ls[lookback_ls.index(L):1] if lookback_ls.index(L) == 0 else lookback_ls[0:lookback_ls.index(L) + 1]
-    F = F + lookback_ls if model_type not in ['ar', 'risk_metrics'] else [F[0]]
-    training_scheme_factory_dd = {'SAM': SAM, 'ClustAM': ClustAM}
-    transformation = 'log'
-    training_scheme_obj = training_scheme_factory_dd[training_scheme](h=h, F=F, L=L, Q='1D', model_type=model_type,
-                                                                      universe=universe)
-    training_scheme_obj.add_metrics(agg='1W', transformation=transformation, regression_type='pcr', df=df)
 
 

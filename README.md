@@ -1,9 +1,13 @@
-<h1> Research Project 1 </h1>
+<h1> Cryptocurrency volatility forecasting using commonality in intraday volatility </h1>
 <br/>
-<p>minutelyTARDIS.sh: Bash script that initialises and downloads all minutely Tardis. (Note: to be run once). </p>
-<p>research_project1/data_centre/tardis_initial_data.py: Python script to be run in a bash shell window. Args: --exchange and --destination (cf. script for explanation). </p>
-<p>research_project1/data_centre/minutely_tardis.py: Python script that computes data files according to LOBSTER fields. Args: --location (cf. script for explanation). </p>
-<p>research_project1/data_centre/daily_tardis_raw_data.py: Python script that fetches data from TARDIS every day at 5am GMT. Args: --destination (cf.script for explanation).</p>
-<p>rawTARDIS.sh: Bash script that runs every day at 5am GMT (scheduled as a CRON job). Default directory: /data/cholgpu01/not-backed-up/datasets/graf/data/minutelyTARDIS</p>
-<p>plots/: Directory containing all the plots reporting the results presented in this project. </p>
-<p>model/: Directory containing all the source code used to fit the models presented in this project. </p> 
+<p>Repo containing source code of the eponym paper.</p>
+<ul>
+<li>init.sh: Bash script that initialises all directories needed to run the different scripts. </li>
+<li>data_centre/: Directory containing all the databases and files used to store and clean data.</li>
+<li>executables/: Directory containing all executable (.sh files) used to generate results.</li>
+<li>generate/: Directory containing all generate.py scripts used to generate results in .sh files.</li>
+<li>model/: Directory containing all the source code used to fit the models, handling feature engineering, and extra analysis presented in this paper. </li>
+<li>figures/: Directory containing all the figures reporting the results presented in this paper. </li>
+<li>trading/: Directory containing scripts used to backtest the trading strategies presented in the paper.</li>
+</ul>
+

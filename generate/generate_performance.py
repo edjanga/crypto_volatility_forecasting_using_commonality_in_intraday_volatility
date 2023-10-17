@@ -4,14 +4,12 @@ import subprocess
 import plotly.io as pio
 pio.kaleido.scope.mathjax = None
 import plotly.express as px
-import plotly.graph_objects as go
 import os
-from model.training_schemes import TrainingScheme
-from data_centre.data import Reader
+
 
 if __name__ == '__main__':
     n_performers = 5
-    performance = pd.read_csv('performance.csv')
+    performance = pd.read_csv('../performance.csv')
     performance = pd.pivot(data=performance,
                            columns=['L', 'training_scheme'],
                            values='values', index=['metric', 'regression', 'model', 'vol_regime']).round(4)
@@ -51,7 +49,7 @@ if __name__ == '__main__':
     fig.update_xaxes(title='models')
     fig.update_yaxes(title='QLIKE')
     fig.update_layout(title='QLIKE: Top and bottom 5 performers per volatility regime', showlegend=True)
-    fig.write_image(os.path.abspath('./plots/qlike_performance.pdf'))
+    fig.write_image(os.path.abspath('../figures/qlike_performance.pdf'))
     # performance.loc[performance.index.get_level_values(0) == 'qlike', :] = \
     #     performance.loc[performance.index.get_level_values(0) == 'qlike', :].replace(top_performers.values.tolist(),
     #                                                                                 [f'\\textcolor{{green}}\{{{qlike}}}'
