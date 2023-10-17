@@ -9,5 +9,5 @@ source ./venv/bin/activate
 #    python3 ./generate_extra_regression_analysis.py --analysis=$analysis
 #  done
 analysis=feature_importance
-python3 ./generate/generate_extra_regression_analysis.py --analysis=$analysis
+python3 ./generate_extra_regression_analysis.py --analysis=$analysis
 deactivate

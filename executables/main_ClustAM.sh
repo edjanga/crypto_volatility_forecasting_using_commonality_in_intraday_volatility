@@ -11,7 +11,7 @@ l=1W
       #do
         for model in {har_eq,har,ar}
           do
-            python3 ./generate/generate_results.py --L=$l --model=$model --training_scheme=ClustAM \
+            python3 ./generate_results.py --L=$l --model=$model --training_scheme=ClustAM \
             --regression=pcr --transformation=log
           done
       #done

@@ -9,7 +9,7 @@ import os
 
 if __name__ == '__main__':
     n_performers = 5
-    performance = pd.read_csv('../performance.csv')
+    performance = pd.read_csv('./performance.csv')
     performance = pd.pivot(data=performance,
                            columns=['L', 'training_scheme'],
                            values='values', index=['metric', 'regression', 'model', 'vol_regime']).round(4)
@@ -50,15 +50,3 @@ if __name__ == '__main__':
     fig.update_yaxes(title='QLIKE')
     fig.update_layout(title='QLIKE: Top and bottom 5 performers per volatility regime', showlegend=True)
     fig.write_image(os.path.abspath('../figures/qlike_performance.pdf'))
-    # performance.loc[performance.index.get_level_values(0) == 'qlike', :] = \
-    #     performance.loc[performance.index.get_level_values(0) == 'qlike', :].replace(top_performers.values.tolist(),
-    #                                                                                 [f'\\textcolor{{green}}\{{{qlike}}}'
-    #                                                                                 for qlike in
-    #                                                                                 top_performers.values.tolist()])
-    # performance.loc[performance.index.get_level_values(0) == 'qlike', :] = \
-    #     performance.loc[performance.index.get_level_values(0) == 'qlike', :].replace(bottom_performers.values.tolist(),
-    #                                                                                  [f'\\textcolor{{green}}\{{{qlike}}}'
-    #                                                                                   for qlike in
-    #                                                                                   top_performers.values.tolist()])
-    # table = performance.to_latex(multicolumn=True, multirow=True)
-    # subprocess.run('pbcopy', text=True, input=table.replace('NaN', '\\cellcolor{black}'))

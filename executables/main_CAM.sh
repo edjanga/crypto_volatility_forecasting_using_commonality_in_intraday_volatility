@@ -11,7 +11,7 @@ l=1W
       do
         #for model in {har_eq,har,ar}
           #do
-            python3 ./generate/generate_results.py --L=$l --model=ar --training_scheme=CAM --regression=lasso \
+            python3 ./generate_results.py --L=$l --model=ar --training_scheme=CAM --regression=lasso \
             --transformation=log
           #done
       done
