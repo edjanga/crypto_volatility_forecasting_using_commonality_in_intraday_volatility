@@ -3,7 +3,8 @@ import pdb
 import typing
 import pandas as pd
 import lightgbm as lgb
-from sklearn.linear_model import LinearRegression, Lasso, Ridge, ElasticNet
+from sklearn.linear_model import LinearRegression, LassoCV, Ridge, ElasticNetCV, Lasso, ElasticNet
+from sklearn.model_selection import RandomizedSearchCV
 from sklearn.decomposition import PCA
 from sklearn.metrics import r2_score, mean_squared_error, silhouette_score
 from sklearn.cluster import KMeans
@@ -20,6 +21,8 @@ import optuna
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from model.lab import qlike_score#, EarlyStopping
 from optuna.samplers import RandomSampler
+import multiprocessing
+
 
 
 # class EarlyStopping:
@@ -112,6 +115,39 @@ class TrainingScheme(object):
 
     _factory_transformation_dd = {'log': {'transformation': np.log, 'inverse': np.exp},
                                   None: {'transformation': lambda x: x, 'inverse': lambda x: x}}
+    # _params_dd = {
+    #     'lightgbm':
+    #         {'params': {
+    #                 'objective': ['regression'], 'metric': ['mse'], 'max_depth': list(range(1, 4)),
+    #                 'learning_rate': np.linspace(.1, .2, 11).tolist(),
+    #                 'tree_learner': ['data'],
+    #                 'feature_fraction': np.linspace(.5, 1, 5).tolist(),
+    #                 'boosting_type': ['goss'], 'extra_trees': [True],
+    #                 'min_gain_to_split': np.linspace(0, 10, 11).tolist()
+    #             },
+    #         'fit_params': {
+    #             'early_stopping_rounds': 5,
+    #             'eval_metric': 'mse',
+    #             'eval_set': None
+    #         }
+    #     },
+    #     'elastic':
+    #         {'params': {
+    #             'l1_ratio': np.linspace(.01, .99, 99).tolist(),
+    #             'max_iter': [100],
+    #             'random_state': [123]
+    #          }
+    #     },
+    #     'lasso':
+    #         {'params': {
+    #             'alphas': np.linspace(.01, .99, 99).tolist(),
+    #             'max_iter': [100],
+    #             'random_state': [123]
+    #          }
+    #
+    #     }
+    # }
+    # _estimators_dd = {'lightgbm': lgb.LGBMRegressor, 'elastic': ElasticNetCV(), 'lasso': LassoCV()}
     global coins_copy
     coins = [''.join((coin, 'usdt')).upper() for _, coin in enumerate(coin_ls)]
     global coins_dd
@@ -279,16 +315,16 @@ class TrainingScheme(object):
             param = {
                 'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
                 'max_depth': trial.suggest_int('max_depth', 1, 3),
-                'lr': trial.suggest_float('lr', .1, .2),
-                'num_leaves': trial.suggest_int('num_leaves', 2, 8),
+                'lr': trial.suggest_float('lr', .1, .2, log=False),
                 'tree_learner': 'data',
-                #'lambda_l1': trial.suggest_float('lambda_l1', 1e-8, 10.0, log=True),
-                #'lambda_l2': trial.suggest_float('lambda_l2', 1e-8, 10.0, log=True),
-                #'feature_fraction': trial.suggest_float('feature_fraction', .25, .5, log=False)
+                'feature_fraction': trial.suggest_float('feature_fraction', .5, 1, log=False),
+                'min_gain_to_split': trial.suggest_float('min_gain_to_split', 0, 10, log=False),
+                'extra_tree': True, 'boosting_type': 'goss'
             }
             tmp_rres = lgb.train(param, train_set=train_loader, valid_sets=[valid_loader],
-                                 num_boost_round=5,
-                                 callbacks=[lgb.early_stopping(1, first_metric_only=True, verbose=True, min_delta=0.0)])
+                                 num_boost_round=10,
+                                 callbacks=[lgb.early_stopping(3, first_metric_only=True, verbose=True,
+                                                               min_delta=0.0)])
         elif regression_type == 'lasso':
             param = {
                 'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
@@ -321,7 +357,7 @@ class TrainingScheme(object):
             study.set_user_attr(key='best_estimator', value=trial.user_attrs['best_estimator'])
 
     def rolling_metrics_per_date(self, date: datetime, symbol: str, regression_type: str,
-                                 exog: pd.DataFrame, endog: pd.DataFrame, transformation: str,
+                                 exog: pd.DataFrame, endog: pd.DataFrame, transformation: str, optuna_study: bool=True,
                                  **kwargs) -> pd.DataFrame:
         feature_obj = TrainingScheme._factory_model_type_dd[self._model_type]
         train_index = list(set(exog.index[(exog.index.date >= date - L_train) & (exog.index.date < date)]))
@@ -356,11 +392,27 @@ class TrainingScheme(object):
                                    False: exog.columns.tolist()}
             if regression_type not in ['linear', 'pcr']:
                 n_trials = 5 if regression_type not in ['xgboost', 'lightgbm'] else 1
-                study_name = f'{self.__class__.__name__}_{self._L}_{transformation}_{regression_type}_' \
-                             f'{self._model_type}_{symbol}_{date.strftime("%Y-%m-%d")}'
-                study = optuna.create_study(direction='minimize', study_name=study_name, sampler=RandomSampler(123))
-                study.optimize(self.objective, n_trials=n_trials, callbacks=[self.callback], n_jobs=-1)
-                rres = study.user_attrs['best_estimator']
+                if optuna_study:
+                    study_name = f'{self.__class__.__name__}_{self._L}_{transformation}_{regression_type}_' \
+                                 f'{self._model_type}_{symbol}_{date.strftime("%Y-%m-%d")}'
+                    study = optuna.create_study(direction='minimize', study_name=study_name, sampler=RandomSampler(123))
+                    study.optimize(self.objective, n_trials=n_trials, callbacks=[self.callback], n_jobs=-1)
+                    rres = study.user_attrs['best_estimator']
+                else:
+                    params = self._params_dd[regression_type]['params']
+                    if regression_type == 'lightgbm':
+                        estimator = self._estimators_dd[regression_type](extra_trees=True)
+                    else:
+                        estimator = self._estimators_dd[regression_type]()
+                    rres = RandomizedSearchCV(n_jobs=-1, scoring='neg_mean_squared_error', verbose=3,
+                                              random_state=123,
+                                              estimator=estimator, param_distributions=params, n_iter=n_trials)
+                    if regression_type == 'lightgbm':
+                        fit_params = self._params_dd[regression_type]['fit_params']
+                        fit_params['eval_set'] = [(X_valid, y_valid)]
+                        rres.fit_params = fit_params
+                    rres.fit(X_train, y_train)
+                    rres = rres.best_estimator_
             else:
                 if regression_type == 'pcr':
                     rres_pca.fit(X_train)
@@ -383,7 +435,7 @@ class TrainingScheme(object):
                                           index=X_test.index)
 
                     X_test = pd.concat([X_test, own_test], axis=1)
-                rres.fit(X_train, y_train)
+                    rres.fit(X_train, y_train)
             y_hat = pd.Series(data=rres.predict(X_test), index=y_test.index)
             # """ Coefficients """
             # if regression_type != 'lightgbm':
@@ -479,6 +531,8 @@ class TrainingScheme(object):
 
     def add_metrics_per_symbol(self, symbol: str, df: pd.DataFrame, agg: str, transformation: str,
                                regression_type: str = 'linear', **kwargs) -> None:
+        import time
+        start_time = time.time()
         rv_mkt = self.volatility_period(df)
         exog = self.build_exog(symbol=symbol, df=df, regression_type=regression_type, transformation=transformation)
         transformation_dd = {'log': 'log', None: 'level'}
@@ -533,15 +587,15 @@ class SAM(TrainingScheme):
         return exog
 
     def add_metrics(self, df: pd.DataFrame, agg: str, transformation: str, regression_type: str = 'linear') -> None:
-        # for symbol in df.columns:
-        #     self.add_metrics_per_symbol(symbol=symbol, transformation=transformation,
-        #                                 regression_type=regression_type, df=df, agg=agg)
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(lambda x: x, x=symbol) for symbol in self._universe]
-            for future in concurrent.futures.as_completed(futures):
-                symbol = future.result()
-                self.add_metrics_per_symbol(symbol=symbol, transformation=transformation,
-                                            regression_type=regression_type, df=df, agg=agg)
+        for symbol in df.columns:
+            self.add_metrics_per_symbol(symbol=symbol, transformation=transformation, regression_type=regression_type,
+                                        df=df, agg=agg)
+        # with concurrent.futures.ThreadPoolExecutor() as executor:
+        #     futures = [executor.submit(lambda x: x, x=symbol) for symbol in self._universe]
+        #     for future in concurrent.futures.as_completed(futures):
+        #         symbol = future.result()
+        #         self.add_metrics_per_symbol(symbol=symbol, transformation=transformation,
+        #                                     regression_type=regression_type, df=df, agg=agg)
 
 
 class ClustAM(TrainingScheme):
@@ -607,23 +661,23 @@ class CAM(TrainingScheme):
         return exog
 
     def add_metrics(self, regression_type: str, transformation: str, agg: str, df: pd.DataFrame, ** kwargs) -> None:
-        import time
-        start_time = time.time()
-        # for symbol in self._universe:
-        #     print(f'[Data Process]: Process for {symbol} has started...')
-        #     self.add_metrics_per_symbol(symbol=symbol, df=df, agg=agg, regression_type=regression_type,
-        #                                 transformation=transformation)
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            # futures = [executor.submit(self.add_metrics_per_symbol, symbol=symbol, df=df, agg=agg,
-            #                            regression_type=regression_type, transformation=transformation) for symbol in
-            #            self._universe]
-            futures = [executor.submit(lambda x: x, x=symbol) for symbol in self._universe]
-            for future in concurrent.futures.as_completed(futures):
-                symbol = future.result()
-                print(f'[Data Process]: Process for {symbol} has started...')
-                self.add_metrics_per_symbol(symbol=symbol, df=df, agg=agg, regression_type=regression_type,
-                                            transformation=transformation)
-        end_time = time.time()
-        print(end_time-start_time)
+        # import time
+        for symbol in self._universe:
+            # start_time = time.time()
+            print(f'[Data Process]: Process for {symbol} has started...')
+            self.add_metrics_per_symbol(symbol=symbol, df=df, agg=agg, regression_type=regression_type,
+                                        transformation=transformation)
+        # with concurrent.futures.ThreadPoolExecutor() as executor:
+        #     # futures = [executor.submit(self.add_metrics_per_symbol, symbol=symbol, df=df, agg=agg,
+        #     #                            regression_type=regression_type, transformation=transformation) for symbol in
+        #     #            self._universe]
+        #     futures = [executor.submit(lambda x: x, x=symbol) for symbol in self._universe]
+        #     for future in concurrent.futures.as_completed(futures):
+        #         symbol = future.result()
+        #         print(f'[Data Process]: Process for {symbol} has started...')
+        #         self.add_metrics_per_symbol(symbol=symbol, df=df, agg=agg, regression_type=regression_type,
+        #                                     transformation=transformation)
+        # end_time = time.time()
+        # print(end_time-start_time)
 
 
