@@ -279,19 +279,22 @@ class TrainingScheme(object):
             param = {
                 'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
                 'max_depth': trial.suggest_int('max_depth', 1, 3),
-                'lr': trial.suggest_float('lr', .01, .1),
-                'lambda_l1': trial.suggest_float('lambda_l1', 1e-8, 10.0, log=True),
-                'lambda_l2': trial.suggest_float('lambda_l2', 1e-8, 10.0, log=True),
+                'lr': trial.suggest_float('lr', .1, .2),
+                'num_leaves': trial.suggest_int('num_leaves', 2, 8),
+                'tree_learner': 'data',
+                #'lambda_l1': trial.suggest_float('lambda_l1', 1e-8, 10.0, log=True),
+                #'lambda_l2': trial.suggest_float('lambda_l2', 1e-8, 10.0, log=True),
+                #'feature_fraction': trial.suggest_float('feature_fraction', .25, .5, log=False)
             }
             tmp_rres = lgb.train(param, train_set=train_loader, valid_sets=[valid_loader],
-                                 num_boost_round=10,
-                                 callbacks=[lgb.early_stopping(5, first_metric_only=True, verbose=True, min_delta=0.0)])
+                                 num_boost_round=5,
+                                 callbacks=[lgb.early_stopping(1, first_metric_only=True, verbose=True, min_delta=0.0)])
         elif regression_type == 'lasso':
             param = {
                 'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
                 'alpha': trial.suggest_float('alpha', .01, .99, log=False)
             }
-            tmp_rres = Lasso(alpha=param['alpha'], fit_intercept=training_scheme_name != 'UAM', max_iter=500)
+            tmp_rres = Lasso(alpha=param['alpha'], fit_intercept=training_scheme_name != 'UAM', max_iter=100)
         elif regression_type == 'ridge':
             param = {
                 'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
@@ -305,7 +308,7 @@ class TrainingScheme(object):
                 'l1_ratio': trial.suggest_float('l1_ratio', .01, .99, log=False),
             }
             tmp_rres = ElasticNet(alpha=param['alpha'], l1_ratio=param['l1_ratio'],
-                                  fit_intercept=training_scheme_name != 'UAM', max_iter=500)
+                                  fit_intercept=training_scheme_name != 'UAM', max_iter=100)
         if regression_type not in ['lightgbm', 'xgboost']:
             tmp_rres.fit(X_train, y_train)
         loss = mean_squared_error(y_valid, tmp_rres.predict(X_valid))
@@ -333,7 +336,7 @@ class TrainingScheme(object):
             y_hat = pd.concat([exog.loc[train_index],
                                pd.DataFrame(data=np.nan, index=exog.loc[test_index].index,
                                             columns=exog.columns)])
-            y_hat = y_hat.ewm(alpha=feature_obj.factor).mean().loc[L_train:].iloc[:, 0]
+            y_hat = y_hat.ewm(alpha=feature_obj.factor).mean().loc[y_hat.index.date == date, :].iloc[:, 0]
             y_hat.name = 0
             y_test = endog.loc[test_index]
         else:
@@ -422,57 +425,57 @@ class TrainingScheme(object):
         dates = list(np.unique(exog.index.date))
         L_train = relativedelta(minutes=TrainingScheme.L_shift_dd[self._L] * 5)
         start = dates[0] + L_train
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(self.df_per_day, df=exog, date=date) for date in dates[dates.index(start):]]
-            for future in concurrent.futures.as_completed(futures):
-                date, exog = future.result()
-                y.append(self.rolling_metrics_per_date(exog=exog, endog=endog, date=date,
-                                                       regression_type=regression_type,
-                                                       transformation=transformation, **kwargs))
-            y = pd.concat(y).dropna()
-            y.sort_index(inplace=True)
-            if self.__class__.__name__ != 'UAM':
-                y = TrainingScheme._factory_transformation_dd[transformation]['inverse'](y).reset_index(
-                    names='timestamp')
-                y['symbol'] = symbol
-            else:
-                y[['RV', 0]] = TrainingScheme._factory_transformation_dd[transformation]['inverse'](y[['RV', 0]])
-                y.reset_index(inplace=True)
-            y = y.groupby(by=[pd.Grouper(key='symbol'), pd.Grouper(key='timestamp', freq=self._h)]).sum()
-            tmp = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=agg)])
-            mse = tmp.apply(lambda x: mean_squared_error(x.iloc[:, 0], x.iloc[:, -1]))
-            qlike = tmp.apply(qlike_score)
-            r2 = tmp.apply(lambda x: r2_score(x.iloc[:, 0], x.iloc[:, -1]))
-            if self.__class__.__name__ == 'UAM':
-                mse = mse.groupby(by=pd.Grouper(level='timestamp')).sum()
-                r2 = r2.groupby(by=pd.Grouper(level='timestamp')).mean()
-                qlike = qlike.groupby(by=pd.Grouper(level='timestamp')).mean()
-            mse = pd.Series(mse, name=symbol)
-            qlike = pd.Series(qlike, name=symbol)
-            r2 = pd.Series(r2, name=symbol)
-            mse = pd.melt(pd.DataFrame(mse), ignore_index=False, value_name='values', var_name='symbol')
-            mse = mse.assign(metric='mse')
-            r2 = pd.melt(pd.DataFrame(r2), ignore_index=False, value_name='values', var_name='symbol')
-            r2 = r2.assign(metric='r2')
-            qlike = pd.melt(pd.DataFrame(qlike), ignore_index=False, value_name='values', var_name='symbol')
-            qlike = qlike.assign(metric='qlike')
-            y.reset_index(level='symbol', inplace=True)
-            y.index = pd.to_datetime(y.index, utc=True)
-            y = y.assign(model=self._model_type)
-            y = y.rename(columns={symbol: 'y', 0: 'y_hat'})
-            table_dd = {'r2': r2, 'qlike': qlike, 'mse': mse, 'y': y}
-            training_scheme_tables = {'r2': self._training_scheme_r2_dd, 'qlike': self._training_scheme_qlike_dd,
-                                      'mse': self._training_scheme_mse_dd, 'y': self._training_scheme_y_dd}
-            transformation_dd = {'log': 'log', None: 'level'}
-            for table_name, table in table_dd.items():
-                table['symbol'] = symbol
-                table['model'] = self._model_type
-                table['L'] = self._L
-                table['training_scheme'] = self.__class__.__name__
-                table['transformation'] = transformation_dd[transformation]
-                table['regression'] = regression_type
-                table['h'] = self._h
-                training_scheme_tables[table_name][symbol] = table
+        # with concurrent.futures.ThreadPoolExecutor() as executor:
+        #     futures = [executor.submit(self.df_per_day, df=exog, date=date) for date in dates[dates.index(start):]]
+        # for future in concurrent.futures.as_completed(futures):
+        #     date, exog = future.result()
+        for date in dates[dates.index(start):]:
+            y.append(self.rolling_metrics_per_date(exog=exog, endog=endog, date=date, regression_type=regression_type,
+                                                   transformation=transformation, **kwargs))
+        y = pd.concat(y).dropna()
+        y.sort_index(inplace=True)
+        if self.__class__.__name__ != 'UAM':
+            y = TrainingScheme._factory_transformation_dd[transformation]['inverse'](y).reset_index(
+                names='timestamp')
+            y['symbol'] = symbol
+        else:
+            y[['RV', 0]] = TrainingScheme._factory_transformation_dd[transformation]['inverse'](y[['RV', 0]])
+            y.reset_index(inplace=True)
+        y = y.groupby(by=[pd.Grouper(key='symbol'), pd.Grouper(key='timestamp', freq=self._h)]).sum()
+        tmp = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=agg)])
+        mse = tmp.apply(lambda x: mean_squared_error(x.iloc[:, 0], x.iloc[:, -1]))
+        qlike = tmp.apply(qlike_score)
+        r2 = tmp.apply(lambda x: r2_score(x.iloc[:, 0], x.iloc[:, -1]))
+        if self.__class__.__name__ == 'UAM':
+            mse = mse.groupby(by=pd.Grouper(level='timestamp')).sum()
+            r2 = r2.groupby(by=pd.Grouper(level='timestamp')).mean()
+            qlike = qlike.groupby(by=pd.Grouper(level='timestamp')).mean()
+        mse = pd.Series(mse, name=symbol)
+        qlike = pd.Series(qlike, name=symbol)
+        r2 = pd.Series(r2, name=symbol)
+        mse = pd.melt(pd.DataFrame(mse), ignore_index=False, value_name='values', var_name='symbol')
+        mse = mse.assign(metric='mse')
+        r2 = pd.melt(pd.DataFrame(r2), ignore_index=False, value_name='values', var_name='symbol')
+        r2 = r2.assign(metric='r2')
+        qlike = pd.melt(pd.DataFrame(qlike), ignore_index=False, value_name='values', var_name='symbol')
+        qlike = qlike.assign(metric='qlike')
+        y.reset_index(level='symbol', inplace=True)
+        y.index = pd.to_datetime(y.index, utc=True)
+        y = y.assign(model=self._model_type)
+        y = y.rename(columns={symbol: 'y', 0: 'y_hat'})
+        table_dd = {'r2': r2, 'qlike': qlike, 'mse': mse, 'y': y}
+        training_scheme_tables = {'r2': self._training_scheme_r2_dd, 'qlike': self._training_scheme_qlike_dd,
+                                  'mse': self._training_scheme_mse_dd, 'y': self._training_scheme_y_dd}
+        transformation_dd = {'log': 'log', None: 'level'}
+        for table_name, table in table_dd.items():
+            table['symbol'] = symbol
+            table['model'] = self._model_type
+            table['L'] = self._L
+            table['training_scheme'] = self.__class__.__name__
+            table['transformation'] = transformation_dd[transformation]
+            table['regression'] = regression_type
+            table['h'] = self._h
+            training_scheme_tables[table_name][symbol] = table
 
     def add_metrics_per_symbol(self, symbol: str, df: pd.DataFrame, agg: str, transformation: str,
                                regression_type: str = 'linear', **kwargs) -> None:
@@ -530,9 +533,15 @@ class SAM(TrainingScheme):
         return exog
 
     def add_metrics(self, df: pd.DataFrame, agg: str, transformation: str, regression_type: str = 'linear') -> None:
-        for symbol in df.columns:
-            self.add_metrics_per_symbol(symbol=symbol, transformation=transformation,
-                                        regression_type=regression_type, df=df, agg=agg)
+        # for symbol in df.columns:
+        #     self.add_metrics_per_symbol(symbol=symbol, transformation=transformation,
+        #                                 regression_type=regression_type, df=df, agg=agg)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(lambda x: x, x=symbol) for symbol in self._universe]
+            for future in concurrent.futures.as_completed(futures):
+                symbol = future.result()
+                self.add_metrics_per_symbol(symbol=symbol, transformation=transformation,
+                                            regression_type=regression_type, df=df, agg=agg)
 
 
 class ClustAM(TrainingScheme):
@@ -598,9 +607,23 @@ class CAM(TrainingScheme):
         return exog
 
     def add_metrics(self, regression_type: str, transformation: str, agg: str, df: pd.DataFrame, ** kwargs) -> None:
-        for symbol in self._universe:
-            print(f'[Data Process]: Process for {symbol} has started...')
-            self.add_metrics_per_symbol(symbol=symbol, df=df, agg=agg, regression_type=regression_type,
-                                        transformation=transformation)
+        import time
+        start_time = time.time()
+        # for symbol in self._universe:
+        #     print(f'[Data Process]: Process for {symbol} has started...')
+        #     self.add_metrics_per_symbol(symbol=symbol, df=df, agg=agg, regression_type=regression_type,
+        #                                 transformation=transformation)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            # futures = [executor.submit(self.add_metrics_per_symbol, symbol=symbol, df=df, agg=agg,
+            #                            regression_type=regression_type, transformation=transformation) for symbol in
+            #            self._universe]
+            futures = [executor.submit(lambda x: x, x=symbol) for symbol in self._universe]
+            for future in concurrent.futures.as_completed(futures):
+                symbol = future.result()
+                print(f'[Data Process]: Process for {symbol} has started...')
+                self.add_metrics_per_symbol(symbol=symbol, df=df, agg=agg, regression_type=regression_type,
+                                            transformation=transformation)
+        end_time = time.time()
+        print(end_time-start_time)
 
 
