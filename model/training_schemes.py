@@ -356,7 +356,7 @@ class TrainingScheme(object):
             study.set_user_attr(key='best_estimator', value=trial.user_attrs['best_estimator'])
 
     def rolling_metrics_per_date(self, date: datetime, symbol: str, regression_type: str,
-                                 exog: pd.DataFrame, endog: pd.DataFrame, transformation: str, optuna_study: bool=True,
+                                 exog: pd.DataFrame, endog: pd.DataFrame, transformation: str,
                                  **kwargs) -> pd.DataFrame:
         feature_obj = TrainingScheme._factory_model_type_dd[self._model_type]
         train_index = list(set(exog.index[(exog.index.date >= date - L_train) & (exog.index.date < date)]))
@@ -391,27 +391,11 @@ class TrainingScheme(object):
                                    False: exog.columns.tolist()}
             if regression_type not in ['linear', 'pcr']:
                 n_trials = 5 if regression_type not in ['xgboost', 'lightgbm'] else 1
-                if optuna_study:
-                    study_name = f'{self.__class__.__name__}_{self._L}_{transformation}_{regression_type}_' \
-                                 f'{self._model_type}_{symbol}_{date.strftime("%Y-%m-%d")}'
-                    study = optuna.create_study(direction='minimize', study_name=study_name, sampler=RandomSampler(123))
-                    study.optimize(self.objective, n_trials=n_trials, callbacks=[self.callback], n_jobs=-1)
-                    rres = study.user_attrs['best_estimator']
-                else:
-                    params = self._params_dd[regression_type]['params']
-                    if regression_type == 'lightgbm':
-                        estimator = self._estimators_dd[regression_type](extra_trees=True)
-                    else:
-                        estimator = self._estimators_dd[regression_type]()
-                    rres = RandomizedSearchCV(n_jobs=-1, scoring='neg_mean_squared_error', verbose=3,
-                                              random_state=123,
-                                              estimator=estimator, param_distributions=params, n_iter=n_trials)
-                    if regression_type == 'lightgbm':
-                        fit_params = self._params_dd[regression_type]['fit_params']
-                        fit_params['eval_set'] = [(X_valid, y_valid)]
-                        rres.fit_params = fit_params
-                    rres.fit(X_train, y_train)
-                    rres = rres.best_estimator_
+                study_name = f'{self.__class__.__name__}_{self._L}_{transformation}_{regression_type}_' \
+                             f'{self._model_type}_{symbol}_{date.strftime("%Y-%m-%d")}'
+                study = optuna.create_study(direction='minimize', study_name=study_name, sampler=RandomSampler(123))
+                study.optimize(self.objective, n_trials=n_trials, callbacks=[self.callback], n_jobs=-1)
+                rres = study.user_attrs['best_estimator']
             else:
                 if regression_type == 'pcr':
                     rres_pca.fit(X_train)
@@ -476,10 +460,6 @@ class TrainingScheme(object):
         dates = list(np.unique(exog.index.date))
         L_train = relativedelta(minutes=TrainingScheme.L_shift_dd[self._L] * 5)
         start = dates[0] + L_train
-        # with concurrent.futures.ThreadPoolExecutor() as executor:
-        #     futures = [executor.submit(self.df_per_day, df=exog, date=date) for date in dates[dates.index(start):]]
-        # for future in concurrent.futures.as_completed(futures):
-        #     date, exog = future.result()
         for date in dates[dates.index(start):]:
             y.append(self.rolling_metrics_per_date(exog=exog, endog=endog, date=date, regression_type=regression_type,
                                                    transformation=transformation, **kwargs))
