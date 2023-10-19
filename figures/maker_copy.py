@@ -184,7 +184,7 @@ class PlotResults:
     #db_connect_correlation = sqlite3.connect(database=os.path.abspath('./data_centre/databases/correlation.db'))
     colors_ls = px.colors.qualitative.Plotly
     _models_ls = ['ar', 'har', 'har_eq'] #'risk_metrics'
-    _training_scheme_ls = ['ClustAM', 'CAM']
+    _training_scheme_ls = ['CAM']
     _L = ['1W', '1M', '6M']
 
     def __init__(self):
@@ -442,7 +442,7 @@ class PlotResults:
                                                             pd.Grouper(level='training_scheme')]).mean()
         feature_importance = \
             feature_importance.groupby(by=pd.Grouper(level='training_scheme')).apply(
-                lambda x: x.sort_values(ascending=False)[:30]
+                lambda x: x.sort_values(ascending=False)[:10]
             )
         feature_importance = feature_importance.droplevel(axis=0, level=2)
         fig = make_subplots(cols=len(PlotResults._training_scheme_ls),
@@ -451,11 +451,31 @@ class PlotResults:
             tmp = feature_importance[feature_importance.index.get_level_values(0) == training_scheme].copy()
             tmp.sort_values(inplace=True, ascending=True)
             fig.add_traces(data=go.Bar(x=tmp.values.tolist(), y=tmp.index.get_level_values(1), showlegend=False,
-                                       orientation='h'),
-                           rows=1, cols=i+1) #marker={'color': tmp.values.tolist(), 'colorscale': 'Rainbow'},
-        fig.update_layout(title='Feature importance: Top 30')
-        fig.show()
+                                       orientation='h', marker={'color': tmp.values.tolist(), 'colorscale': 'viridis'}),
+                           rows=1, cols=i+1)
+        fig.update_layout(title='Feature importance: Top 10')
         pdb.set_trace()
+        if save:
+            fig.write_image(os.path.abspath(f'{EDA._figures_dir}/feature_importance.pdf'))
+        else:
+            fig.show()
+
+    @staticmethod
+    def dm_test(save: bool = True) -> None:
+        data = pd.read_csv(os.path.relpath('../figures/dm_stats.csv'))
+        data = data.assign(x_bar='')
+        fig = px.bar(facet_row='model', facet_col='regression', data_frame=data, x='' ,y='stats', text='level_1',
+                     title='SAM 6M: Pairwise DM test', facet_row_spacing=0.1, color='regression2',
+                     category_orders={'level_1': ['CAM'],
+                                      'regression2': ['lasso', 'elastic', 'lightgbm']}, barmode='group')
+        fig.update_xaxes(title_text='', tickangle=90)
+        fig.update_yaxes(title_text='')
+        fig.show()
+        pdb.show()
+        if save:
+            fig.write_image(os.path.abspath(f'{EDA._figures_dir}/dm_test.pdf'))
+        else:
+            fig.show()
 
 
 if __name__ == '__main__':

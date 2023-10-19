@@ -17,21 +17,16 @@ if __name__ == '__main__':
     F = ['30T', '1H', '6H', '12H']
     lookback_ls = ['1D', '1W', '1M', '6M']
     components_analysis_obj = TrainingSchemeAnalysis()
-    for training_scheme in ['ClustAM', 'CAM']:
+    for training_scheme in ['CAM']:
         components_analysis_obj.training_scheme = training_scheme
-        for L in ['6M', '1M', '1W']:
+        for L in ['1W']:#'6M', '1M',
             components_analysis_obj.L = L
             if args.analysis == 'feature_importance':
-                for model_type in ['har_eq', 'ar', 'har']:
-                # with concurrent.futures.ThreadPoolExecutor() as executor:
-                #     futures = [executor.submit(components_analysis_obj.lags_and_model_type, F=F, model_type=model_type)
-                #                for model_type in ['ar', 'har', 'har_eq']]
-                #     for future in concurrent.futures.as_completed(futures):
-                #         model_type, F = future.result()
-                    components_analysis_obj.feature_imp(h='30T', F=F, model_type=model_type,
-                                                        universe=components_analysis_obj.rv.columns.tolist(),
-                                                        transformation='log')
-                # maker_obj.feature_importance(save=True)
+                # for model_type in ['har_eq', 'ar', 'har', 'risk_metrics']:
+                #     components_analysis_obj.feature_imp(h='30T', F=F, model_type=model_type,
+                #                                         universe=components_analysis_obj.rv.columns.tolist(),
+                #                                         transformation='log')
+                maker_obj.feature_importance(save=True)
             elif args.analysis == 'coefficient_analysis':
-                #components_analysis_obj.coefficient_analysis()
+                components_analysis_obj.coefficient_analysis()
                 maker_obj.first_principal_component(save=True)

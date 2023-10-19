@@ -25,27 +25,22 @@ def objective(trial):
         valid_loader = lgb.Dataset(X_valid, label=y_valid)
         param = {
             'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
-            'max_depth': trial.suggest_int('max_depth', 1, 3), 'lr': trial.suggest_float('lr', .01, .1),
-            'lambda_l1': trial.suggest_float('lambda_l1', 1e-8, 10.0, log=True),
-            'lambda_l2': trial.suggest_float('lambda_l2', 1e-8, 10.0, log=True),
+            'max_depth': trial.suggest_int('max_depth', 1, 3),
+            'lr': trial.suggest_float('lr', .01, .1, log=False),
+            'tree_learner': 'data',
+            'feature_fraction': trial.suggest_float('feature_fraction', .5, 1, log=False),
+            'extra_tree': True, 'boosting_type': 'goss'
         }
-        try:
-            tmp_rres = lgb.train(param, train_set=train_loader, valid_sets=[valid_loader],
-                                 num_boost_round=10,
-                                 callbacks=[lgb.early_stopping(5, first_metric_only=True, verbose=True, min_delta=0.0)])
-        except lgb.basic.LightGBMError as e:
-            print(e)
-            pdb.set_trace()
+        tmp_rres = lgb.train(param, train_set=train_loader, valid_sets=[valid_loader],
+                             num_boost_round=5,
+                             callbacks=[lgb.early_stopping(1, first_metric_only=True, verbose=True, min_delta=0.0)])
     elif regression_type == 'lasso':
-        param = {'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
+        param = {'objective': 'regression', 'metric': 'mse', 'verbosity': -1, 'max_iter': 100,
                  'alpha': trial.suggest_float('alpha', 1e-8, 10.0, log=True)
                  }
         tmp_rres = Lasso(alpha=param['alpha'])
     if regression_type != 'lightgbm':
-        try:
-            tmp_rres.fit(X_train, y_train)
-        except UnboundLocalError:
-            pdb.set_trace()
+        tmp_rres.fit(X_train, y_train)
     loss = mean_squared_error(y_valid, tmp_rres.predict(X_valid))
     trial.set_user_attr(key='best_estimator', value=tmp_rres)
     return loss
@@ -186,7 +181,7 @@ class TrainingSchemeAnalysis:
             coefficient = coefficient.assign(L=self._L, training_scheme=self._training_scheme)
             coefficient.to_sql(name=f'coefficient_1st_principal_component', con=TrainingScheme._db_connect_pca,
                                if_exists='append')
-            print(f'[DATA INSERTION]: coefficient_{self._training_scheme}_{self._L}_1st_principal_component '
+            print(f'[Data Insertion]: coefficient_{self._training_scheme}_{self._L}_1st_principal_component '
                   f'has been inserted.')
 
     def feature_imp_per_date(self, model_type: str, date: datetime, symbol: str, feature_imp_per_symbol: pd.DataFrame,
@@ -215,20 +210,16 @@ class TrainingSchemeAnalysis:
                                     ))
         study.optimize(objective, n_trials=1, callbacks=[callback], n_jobs=-1)
         rres = study.user_attrs['best_estimator']
-        feature_imp_per_symbol.loc[date, rres.feature_name()] = rres.feature_importance()
+        feature_imp_per_symbol.loc[date, rres.feature_name()] = \
+            rres.feature_importance(importance_type='split', iteration=-1)
 
     def feature_imp_symbol(self, h: str, F: typing.List[str], model_type: str, universe: typing.List[str], symbol: str,
                            training_scheme_obj: TrainingScheme, Q='1D', transformation: str = 'log') -> None:
         feature_imp = pd.DataFrame()
         global L_train
         L_train = relativedelta(minutes=TrainingScheme.L_shift_dd[training_scheme_obj.L] * 5)
-        if self._training_scheme == 'ClustAM':
-            _, member_ls = training_scheme_obj.cluster_members(symbol)
-            df = training_scheme_obj.build_exog(symbol=member_ls, df=self._rv[member_ls].copy(),
-                                                regression_type='lightgbm', transformation=transformation)
-        else:
-            df = training_scheme_obj.build_exog(df=self._rv.copy(), transformation=transformation,
-                                                regression_type='lightgbm')
+        df = training_scheme_obj.build_exog(df=self._rv.copy(), transformation=transformation,
+                                            regression_type='lightgbm')
         if 'dates' not in locals():
             dates = list(np.unique(df.index.date))
             start = dates[0] + L_train
@@ -265,12 +256,9 @@ class TrainingSchemeAnalysis:
             self.feature_imp_symbol(h=h, F=F, model_type=model_type, universe=universe, symbol=symbol, Q=Q,
                                     transformation=transformation, training_scheme_obj=training_scheme_obj)
         feature_imp = pd.concat(feature_imp_dd.values())
-        if self._training_scheme == 'ClustAM':
-            feature_s = pd.Series(feature_imp.feature.str.split('_').apply(lambda x: x[0]), index=feature_imp.index)
-            feature_imp.loc[:, 'importance'] = feature_imp.loc[:, 'importance']*feature_s
-            pdb.set_trace()
-        """ Multiply by normalizer factor, i.e. len(cluster) / len(univers) """
         feature_imp.dropna(inplace=True)
+        feature_imp['feature'] = feature_imp['feature'].str.replace('_RET_30T', '')
+        feature_imp['feature'] = feature_imp['feature'].str.replace('_30T', '')
         feature_imp = feature_imp.groupby(
             by=[pd.Grouper(key='feature')]).agg(
             {'importance': 'mean', 'training_scheme': 'last', 'model_type': 'last',
@@ -278,7 +266,7 @@ class TrainingSchemeAnalysis:
         )
         feature_imp.to_sql(name=self._training_scheme, con=self._db_feature_importance, if_exists='append')
         print(
-            f'[DATA INSERTION]: Feature importance for {self._training_scheme}_{self._L}_{model_type}'
+            f'[Data Insertion]: Feature importance for {self._training_scheme}_{self._L}_{model_type}'
             f'_{transformation} has been inserted.'
         )
     @staticmethod

@@ -20,7 +20,8 @@ class Trader:
     """
         Backtesting class
     """
-    db_connect_y = sqlite3.connect(os.path.abspath('../data_centre/databases/y.db'), check_same_thread=False)
+    _data_centre_dir = os.path.abspath(__file__).replace('/trading/strategies.py', '/data_centre')
+    db_connect_y = sqlite3.connect(os.path.abspath(f'{_data_centre_dir}/databases/y.db'), check_same_thread=False)
     reader_obj = Reader()
     PnL_dd = dict()
     returns_dd = dict()
@@ -38,13 +39,13 @@ class Trader:
         self._bottom_performers = bottom_performers
 
     def PnL(self) -> pd.DataFrame:
-        def PnL_per_item(h: str, training_scheme: str, L: str, transformation: str,
+        def PnL_per_item(h: str, vol_regime: str, training_scheme: str, L: str, transformation: str,
                          regression_type: str, model: str) -> None:
             query = \
                 f'SELECT \"y_hat\", \"symbol\", \"index\", \"model\", \"training_scheme\", \"L\",' \
                 f'\"transformation\", \"regression\" FROM y_{L} WHERE \"training_scheme\" = \"{training_scheme}\"' \
                 f' AND \"transformation\" = \"{transformation}\" AND \"regression\" = \"{regression_type}\"' \
-                f' AND \"model\" = \"{model}\";'
+                f' AND \"model\" = \"{model}\" AND vol_regime = \"{vol_regime}\";'
             y_hat = pd.read_sql(query, con=Trader.db_connect_y)[['index', 'y_hat', 'symbol']]
             y_hat = y_hat.set_index('index')
             y_hat.index = pd.to_datetime(y_hat.index, utc=pytz.UTC)
@@ -63,13 +64,15 @@ class Trader:
             cumPnL = pd.Series(Trader.returns_dd[(f'{training_scheme}_{L}_{regression_type}_{model}')].cumsum(),
                                name=f'{training_scheme}_{L}_{regression_type}_{model}').fillna(0)
             Trader.PnL_dd[f'{training_scheme}_{L}_{regression_type}_{model}'] = cumPnL
+        pdb.set_trace()
         with concurrent.futures.ThreadPoolExecutor() as executor:
             PnL_per_item_results_dd = {option: executor.submit(PnL_per_item, h=self._h,
-                                                               training_scheme=option[0],
-                                                               L=option[1], transformation='log',
-                                                               regression_type=option[2], model=option[3])
+                                                               vol_regime=option[0],
+                                                               training_scheme=option[1],
+                                                               L=option[2], transformation='log',
+                                                               regression_type=option[3], model=option[4])
                                        for option in self._top_performers.values.tolist()+
-                                       self._bottom_performers.values.tolist()}
+                                       self._bottom_performers.values.tolist() if option[2]=='6M'}
 
 
 if __name__ == '__main__':
@@ -80,7 +83,8 @@ if __name__ == '__main__':
     performance = performance.loc[~performance.regression.isin(['ridge', 'risk_metrics']), :]
     performance = pd.pivot(data=performance,
                            columns=['metric'],
-                           values='values', index=['training_scheme', 'L', 'regression', 'model'])[['qlike']]
+                           values='values',
+                           index=['vol_regime', 'training_scheme', 'L', 'regression', 'model'])[['qlike']]
     n_performers = 5
     """Top 5 and bottom 5 performers"""
     top_performers = performance.sort_values(by='qlike').iloc[:n_performers].index
@@ -119,6 +123,7 @@ if __name__ == '__main__':
     fig.add_hline(y=0, line_width=1, line_dash='dash', line_color='black')
     fig.update_xaxes(tickangle=45, title='Date')
     fig.update_yaxes(title='Cumulative PnL')
+    pdb.set_trace()
     fig.write_image(os.path.abspath(f'../figures/cum_PnL.pdf'))
 
 

@@ -318,7 +318,6 @@ class TrainingScheme(object):
                 'lr': trial.suggest_float('lr', .1, .2, log=False),
                 'tree_learner': 'data',
                 'feature_fraction': trial.suggest_float('feature_fraction', .5, 1, log=False),
-                'min_gain_to_split': trial.suggest_float('min_gain_to_split', 0, 10, log=False),
                 'extra_tree': True, 'boosting_type': 'goss'
             }
             tmp_rres = lgb.train(param, train_set=train_loader, valid_sets=[valid_loader],
@@ -330,7 +329,7 @@ class TrainingScheme(object):
                 'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
                 'alpha': trial.suggest_float('alpha', .01, .99, log=False)
             }
-            tmp_rres = Lasso(alpha=param['alpha'], fit_intercept=training_scheme_name != 'UAM', max_iter=100)
+            tmp_rres = Lasso(alpha=param['alpha'], fit_intercept=training_scheme_name != 'UAM', max_iter=50)
         elif regression_type == 'ridge':
             param = {
                 'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
@@ -344,7 +343,7 @@ class TrainingScheme(object):
                 'l1_ratio': trial.suggest_float('l1_ratio', .01, .99, log=False),
             }
             tmp_rres = ElasticNet(alpha=param['alpha'], l1_ratio=param['l1_ratio'],
-                                  fit_intercept=training_scheme_name != 'UAM', max_iter=100)
+                                  fit_intercept=training_scheme_name != 'UAM', max_iter=50)
         if regression_type not in ['lightgbm', 'xgboost']:
             tmp_rres.fit(X_train, y_train)
         loss = mean_squared_error(y_valid, tmp_rres.predict(X_valid))
