@@ -15,5 +15,5 @@ figures/*.png
 figures/*.pdf
 test*.py
 code_to_be_further_investigated.py
-performance.csv
+*.csv
 
