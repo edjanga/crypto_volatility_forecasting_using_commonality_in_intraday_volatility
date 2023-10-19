@@ -115,39 +115,6 @@ class TrainingScheme(object):
 
     _factory_transformation_dd = {'log': {'transformation': np.log, 'inverse': np.exp},
                                   None: {'transformation': lambda x: x, 'inverse': lambda x: x}}
-    # _params_dd = {
-    #     'lightgbm':
-    #         {'params': {
-    #                 'objective': ['regression'], 'metric': ['mse'], 'max_depth': list(range(1, 4)),
-    #                 'learning_rate': np.linspace(.1, .2, 11).tolist(),
-    #                 'tree_learner': ['data'],
-    #                 'feature_fraction': np.linspace(.5, 1, 5).tolist(),
-    #                 'boosting_type': ['goss'], 'extra_trees': [True],
-    #                 'min_gain_to_split': np.linspace(0, 10, 11).tolist()
-    #             },
-    #         'fit_params': {
-    #             'early_stopping_rounds': 5,
-    #             'eval_metric': 'mse',
-    #             'eval_set': None
-    #         }
-    #     },
-    #     'elastic':
-    #         {'params': {
-    #             'l1_ratio': np.linspace(.01, .99, 99).tolist(),
-    #             'max_iter': [100],
-    #             'random_state': [123]
-    #          }
-    #     },
-    #     'lasso':
-    #         {'params': {
-    #             'alphas': np.linspace(.01, .99, 99).tolist(),
-    #             'max_iter': [100],
-    #             'random_state': [123]
-    #          }
-    #
-    #     }
-    # }
-    # _estimators_dd = {'lightgbm': lgb.LGBMRegressor, 'elastic': ElasticNetCV(), 'lasso': LassoCV()}
     global coins_copy
     coins = [''.join((coin, 'usdt')).upper() for _, coin in enumerate(coin_ls)]
     global coins_dd
