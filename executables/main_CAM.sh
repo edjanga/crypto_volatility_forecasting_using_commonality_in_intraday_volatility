@@ -4,15 +4,16 @@ source ../venv/bin/activate
 #######################################################
 ## Model performance CAM.
 #######################################################
-for l in {6M,1M,1W}
+for l in {1W,1M,6M}
   do
     for regression_type in {lightgbm,elastic,lasso,pcr}
       do
-        for model in {har_eq,har,ar,risk_metrics}
+        for model in {har_eq,har,ar}
           do
-            python3 ../generate_results.py --L=$l --model=$model --training_scheme=CAM --regression=$regression_type \
-            --transformation=log
+            python3 ../generate_results.py --L=6M --model=$model --training_scheme=CAM --regression=$regression_type \
+            --transformation=log &
           done
+          wait
       done
   done
-deactivate
+
