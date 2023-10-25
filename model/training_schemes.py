@@ -12,80 +12,12 @@ from datetime import datetime
 import os
 from dateutil.relativedelta import relativedelta
 from data_centre.helpers import coin_ls
-from data_centre.data import Reader
-from scipy.stats import t
 import sqlite3
-from model.feature_engineering_room import FeatureAR, FeatureHAR, FeatureHAREq, FeatureRiskMetricsEstimator
+from model.feature_engineering_room import FeatureAR, FeatureHAR, FeatureHAREq
 import numpy as np
 import optuna
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from model.lab import qlike_score#, EarlyStopping
+from model.lab import qlike_score
 from optuna.samplers import RandomSampler
-import multiprocessing
-
-
-
-# class EarlyStopping:
-#     """Early stops the training if validation loss doesn't improve after a given patience."""
-#     def __init__(self, nn: bool = True, patience=7, verbose=False, delta=0, path='checkpoint.pt', trace_func=print):
-#         """
-#         Args:
-#             patience (int): How long to wait after last time validation loss improved.
-#                             Default: 7
-#             verbose (bool): If True, prints a message for each validation loss improvement.
-#                             Default: False
-#             delta (float): Minimum change in the monitored quantity to qualify as an improvement.
-#                             Default: 0
-#             path (str): Path for the checkpoint to be saved to.
-#                             Default: 'checkpoint.pt'
-#             trace_func (function): trace print function.
-#                             Default: print
-#         """
-#         self.patience = patience
-#         self.verbose = verbose
-#         self.counter = 0
-#         self.nn = nn
-#         self.best_model = None
-#         self.best_score = None
-#         self.early_stop = False
-#         self.val_loss_min = np.Inf
-#         self.delta = delta
-#         self.path = path
-#         self.trace_func = trace_func
-#
-#     def __call__(self, val_loss, model):
-#
-#         score = -val_loss
-#
-#         if self.best_score is None:
-#             self.best_score = score
-#             if self.nn:
-#                 self.save_checkpoint(val_loss, model)
-#             else:
-#                 self.best_model = model
-#         elif score < self.best_score + self.delta:
-#             self.counter += 1
-#             self.trace_func(f'EarlyStopping counter: {self.counter} out of {self.patience}')
-#             if self.counter >= self.patience:
-#                 self.early_stop = True
-#         else:
-#             self.best_score = score
-#             if self.nn:
-#                 self.save_checkpoint(val_loss, model)
-#             else:
-#                 self.best_model = model
-#             self.counter = 0
-#
-#     def save_checkpoint(self, val_loss, model):
-#         '''Saves model when validation loss decrease.'''
-#         if self.verbose:
-#             self.trace_func(
-#                 f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
-#         if self.nn:
-#             torch.save(model.state_dict(), self.path)
-#         else:
-#             self.best_model = model
-#         self.val_loss_min = val_loss
 
 
 class TrainingScheme(object):
@@ -110,8 +42,7 @@ class TrainingScheme(object):
     _db_connect_pvalues = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases'
                                                                    f'/pvalues.db'),
                                           check_same_thread=False)
-    _factory_model_type_dd = {'ar': FeatureAR(), 'risk_metrics': FeatureRiskMetricsEstimator(), 'har': FeatureHAR(),
-                              'har_eq': FeatureHAREq()}
+    _factory_model_type_dd = {'ar': FeatureAR(), 'har': FeatureHAR(), 'har_eq': FeatureHAREq()}
 
     _factory_transformation_dd = {'log': {'transformation': np.log, 'inverse': np.exp},
                                   None: {'transformation': lambda x: x, 'inverse': lambda x: x}}
@@ -281,28 +212,27 @@ class TrainingScheme(object):
             train_loader, valid_loader = lgb.Dataset(X_train, label=y_train), lgb.Dataset(X_valid, label=y_valid)
             param = {
                 'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
-                'max_depth': trial.suggest_int('max_depth', 1, 3),
-                'lr': trial.suggest_float('lr', .1, .2, log=False),
-                'tree_learner': 'data',
-                'feature_fraction': trial.suggest_float('feature_fraction', .5, 1, log=False),
+                'max_depth': trial.suggest_int('max_depth', 1, 3), 'lr': .1, 'tree_learner': 'data',
+                'feature_fraction': trial.suggest_float('feature_fraction', .1, .8, step=.1, log=False),
                 'extra_tree': True, 'boosting_type': 'goss'
             }
             tmp_rres = lgb.train(param, train_set=train_loader, valid_sets=[valid_loader],
                                  num_boost_round=10,
-                                 callbacks=[lgb.early_stopping(3, first_metric_only=True, verbose=True,
+                                 callbacks=[lgb.early_stopping(1, first_metric_only=True, verbose=True,
                                                                min_delta=0.0)])
         elif regression_type == 'lasso':
             param = {
                 'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
                 'alpha': trial.suggest_float('alpha', .01, .99, log=False)
             }
-            tmp_rres = Lasso(alpha=param['alpha'], fit_intercept=training_scheme_name != 'UAM', max_iter=50)
+            tmp_rres = Lasso(alpha=param['alpha'], fit_intercept=training_scheme_name != 'UAM', max_iter=10,
+                             random_state=123)
         elif regression_type == 'ridge':
             param = {
                 'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
                 'alpha': trial.suggest_float('alpha', .01, .99, log=False),
             }
-            tmp_rres = Ridge(alpha=param['alpha'], fit_intercept=training_scheme_name != 'UAM')
+            tmp_rres = Ridge(alpha=param['alpha'], fit_intercept=training_scheme_name != 'UAM', random_state=123)
         elif regression_type == 'elastic':
             param = {
                 'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
@@ -310,7 +240,7 @@ class TrainingScheme(object):
                 'l1_ratio': trial.suggest_float('l1_ratio', .01, .99, log=False),
             }
             tmp_rres = ElasticNet(alpha=param['alpha'], l1_ratio=param['l1_ratio'],
-                                  fit_intercept=training_scheme_name != 'UAM', max_iter=50)
+                                  fit_intercept=training_scheme_name != 'UAM', max_iter=10, random_state=123)
         if regression_type not in ['lightgbm', 'xgboost']:
             tmp_rres.fit(X_train, y_train)
         loss = mean_squared_error(y_valid, tmp_rres.predict(X_valid))
@@ -357,7 +287,7 @@ class TrainingScheme(object):
                 columns_name_dd = {True: [f'PCA_{i + 1}' for i, _ in enumerate(exog.columns)],
                                    False: exog.columns.tolist()}
             if regression_type not in ['linear', 'pcr']:
-                n_trials = 5 if regression_type not in ['xgboost', 'lightgbm'] else 1
+                n_trials = 5
                 study_name = f'{self.__class__.__name__}_{self._L}_{transformation}_{regression_type}_' \
                              f'{self._model_type}_{symbol}_{date.strftime("%Y-%m-%d")}'
                 study = optuna.create_study(direction='minimize', study_name=study_name, sampler=RandomSampler(123))
@@ -385,24 +315,8 @@ class TrainingScheme(object):
                                           index=X_test.index)
 
                     X_test = pd.concat([X_test, own_test], axis=1)
-                    rres.fit(X_train, y_train)
+                rres.fit(X_train, y_train)
             y_hat = pd.Series(data=rres.predict(X_test), index=y_test.index)
-            # """ Coefficients """
-            # if regression_type != 'lightgbm':
-            #     daily_coefficient = np.concatenate((np.array([rres.intercept_]), rres.coef_))
-            #     coefficient.loc[exog.index[test_index[0]], :] = daily_coefficient
-            #     coefficient.loc[exog.index[test_index[0]], :].fillna(0, inplace=True)
-            #     columns_ls = list(set(X_train.columns).intersection(set(coefficient.columns)))
-            #     columns_ls.sort()
-            #     X_train = X_train.assign(const=1)
-            #     X_train = X_train[['const'] + columns_ls]
-            #     XtX = np.dot(X_train.transpose().values, X_train.values)
-            #     std_err = np.zeros(coefficient.shape[1])
-            #     std_err[:X_train.shape[1]] = np.diag(XtX) ** (.5) / np.sqrt(X_train.shape[0])
-            #     tstats.loc[exog.index[test_index[0]], :] = \
-            #         coefficient.loc[exog.index[test_index[0]], :].div(std_err)
-            #     pvalues.loc[exog.index[test_index[0]], :] = 2 * t.pdf(tstats.loc[exog.index[test_index[0]], :],
-            #                                                           df=L_train - 1)
         return pd.concat([y_test, y_hat], axis=1)
 
     def rolling_metrics(self, exog: pd.DataFrame, agg: str, transformation: str,
@@ -414,7 +328,6 @@ class TrainingScheme(object):
             symbol = kwargs.get('symbol')
         else:
             symbol = 'RV'
-        stats_condition = self.stats_condition(regression_type=regression_type)
         if self.__class__.__name__ != 'UAM':
             if self._model_type == 'har_eq':
                 exog.loc[:, ~exog.columns.str.contains('_SESSION')] = \
@@ -477,8 +390,6 @@ class TrainingScheme(object):
 
     def add_metrics_per_symbol(self, symbol: str, df: pd.DataFrame, agg: str, transformation: str,
                                regression_type: str = 'linear', **kwargs) -> None:
-        import time
-        start_time = time.time()
         rv_mkt = self.volatility_period(df)
         exog = self.build_exog(symbol=symbol, df=df, regression_type=regression_type, transformation=transformation)
         transformation_dd = {'log': 'log', None: 'level'}
@@ -494,15 +405,6 @@ class TrainingScheme(object):
                   'mse': TrainingScheme._db_connect_mse, 'y': TrainingScheme._db_connect_y,
                   'pca': TrainingScheme._db_connect_pca}
         table_dd = {'r2': r2, 'qlike': qlike, 'mse': mse, 'y': y}
-        # stats_condition = self.stats_condition(regression_type=regression_type)
-        # if stats_condition:
-        #     tstats = self._training_scheme_tstats_dd[symbol]
-        #     pvalues = self._training_scheme_pvalues_dd[symbol]
-        #     coefficient = self._training_scheme_coefficient_dd[symbol]
-        #     con_dd.update({'tstats': TrainingScheme._db_connect_tstats,
-        #                    'pvalues': TrainingScheme._db_connect_pvalues,
-        #                    'coefficient': TrainingScheme._db_connect_coefficient})
-        #     table_dd.update({'tstats': tstats, 'pvalues': pvalues, 'coefficient': coefficient})
         count = 1
         for table_name, table in table_dd.items():
             if table_name != 'y':
@@ -536,12 +438,6 @@ class SAM(TrainingScheme):
         for symbol in df.columns:
             self.add_metrics_per_symbol(symbol=symbol, transformation=transformation, regression_type=regression_type,
                                         df=df, agg=agg)
-        # with concurrent.futures.ThreadPoolExecutor() as executor:
-        #     futures = [executor.submit(lambda x: x, x=symbol) for symbol in self._universe]
-        #     for future in concurrent.futures.as_completed(futures):
-        #         symbol = future.result()
-        #         self.add_metrics_per_symbol(symbol=symbol, transformation=transformation,
-        #                                     regression_type=regression_type, df=df, agg=agg)
 
 
 class ClustAM(TrainingScheme):
@@ -583,12 +479,10 @@ class ClustAM(TrainingScheme):
     def add_metrics(self, regression_type: str, transformation: str, agg: str, df: pd.DataFrame) -> None:
         if ClustAM._cluster_group is None:
             ClustAM.build_clusters(df)
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(lambda x: self.cluster_members(x), symbol) for symbol in self._universe]
-            for future in concurrent.futures.as_completed(futures):
-                symbol, member_ls = list(future.result())
-                self.add_metrics_per_symbol(symbol=symbol, df=df[member_ls], agg=agg, regression_type=regression_type,
-                                            transformation=transformation, cluster=member_ls)
+        for symbol in self._universe:
+            _, member_ls = self.cluster_members(symbol)
+            self.add_metrics_per_symbol(symbol=symbol, df=df[member_ls], agg=agg, regression_type=regression_type,
+                                        transformation=transformation, cluster=member_ls)
 
     @property
     def clusters_trained(self):
@@ -607,23 +501,9 @@ class CAM(TrainingScheme):
         return exog
 
     def add_metrics(self, regression_type: str, transformation: str, agg: str, df: pd.DataFrame, ** kwargs) -> None:
-        # import time
         for symbol in self._universe:
-            # start_time = time.time()
             print(f'[Data Process]: Process for {symbol} has started...')
             self.add_metrics_per_symbol(symbol=symbol, df=df, agg=agg, regression_type=regression_type,
                                         transformation=transformation)
-        # with concurrent.futures.ThreadPoolExecutor() as executor:
-        #     # futures = [executor.submit(self.add_metrics_per_symbol, symbol=symbol, df=df, agg=agg,
-        #     #                            regression_type=regression_type, transformation=transformation) for symbol in
-        #     #            self._universe]
-        #     futures = [executor.submit(lambda x: x, x=symbol) for symbol in self._universe]
-        #     for future in concurrent.futures.as_completed(futures):
-        #         symbol = future.result()
-        #         print(f'[Data Process]: Process for {symbol} has started...')
-        #         self.add_metrics_per_symbol(symbol=symbol, df=df, agg=agg, regression_type=regression_type,
-        #                                     transformation=transformation)
-        # end_time = time.time()
-        # print(end_time-start_time)
 
 
