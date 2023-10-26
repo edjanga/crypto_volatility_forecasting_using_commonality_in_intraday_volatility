@@ -10,10 +10,9 @@ for l in {1W,1M,6M}
       do
         for model in {har_eq,har,ar}
           do
-            python3 ../generate_results.py --L=6M --model=$model --training_scheme=CAM --regression=$regression_type \
-            --transformation=log &
+            python3 ../generate_results.py --L=$l --model=$model --training_scheme=CAM --regression=$regression_type \
+            --transformation=log
           done
-          wait
       done
   done
 

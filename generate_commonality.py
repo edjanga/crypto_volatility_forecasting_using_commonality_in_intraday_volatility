@@ -1,7 +1,7 @@
 import pdb
 import sys
 from model.lab import Commonality
-from figures.maker_copy import PlotResults
+from figures.maker import PlotResults
 import argparse
 
 

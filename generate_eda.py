@@ -1,4 +1,4 @@
-from figures.maker_copy import EDA
+from figures.maker import EDA
 import plotly.io as pio
 pio.kaleido.scope.mathjax = None
 

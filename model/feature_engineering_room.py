@@ -62,31 +62,6 @@ class FeatureAR(FeatureBuilderBase):
         return symbol_df.dropna()
 
 
-class FeatureRiskMetricsEstimator(FeatureBuilderBase):
-
-    factor = .94 #lambda in formula
-
-    def __init__(self):
-        super().__init__('risk_metrics')
-        FeatureRiskMetricsEstimator.data_obj = Reader()
-
-    def builder(self, F: typing.Union[typing.List[str], str],
-                df: pd.DataFrame, symbol: typing.Union[str, typing.List[str]]) -> pd.DataFrame:
-        if isinstance(F, str):
-            F = [F]
-        if isinstance(symbol, str):
-            symbol = (symbol, symbol)
-        list_symbol = list(dict.fromkeys(symbol).keys())
-        symbol_df = FeatureRiskMetricsEstimator.data_obj.returns_read(raw=False, symbol=list_symbol)
-        symbol_df = symbol_df.rename(columns={sym: '_'.join((sym, 'RET', F[0])) for sym in symbol_df.columns})
-        symbol_df = symbol_df.sub(symbol_df.mean())**2
-        symbol_df = symbol_df.shift(FeatureRiskMetricsEstimator._lookback_window_dd[F[0]]).dropna()
-        symbol_df = symbol_df.join(FeatureRiskMetricsEstimator.data_obj.rv_read(symbol=list_symbol),
-                                   how='left')
-        symbol_df.columns.name = None
-        return symbol_df
-
-
 class FeatureHAR(FeatureBuilderBase):
 
     def __init__(self):
@@ -181,30 +156,3 @@ class FeatureHAREq(FeatureBuilderBase):
                 tmp_odds[['ASIAN_SESSION', 'US_SESSION', 'EUROPE_SESSION']]
         return symbol_df
 
-
-class FeatureUniversal(FeatureBuilderBase):
-
-    models_dd = {'ar': FeatureAR(),
-                 'har': FeatureHAR(), 'har_eq': FeatureHAREq(),
-                 'risk_metrics': FeatureRiskMetricsEstimator()}
-
-    def __init__(self):
-        super().__init__('har_universal')
-
-    def builder(self, df: pd.DataFrame, model: str, F: typing.List[str],
-                drop: bool = False, one_hot_encoding: bool = False, full: bool = True) -> pd.DataFrame:
-        model_obj = FeatureUniversal.models_dd[model]
-        tmp = df.copy().replace(0, np.nan).ffill()
-        own = pd.DataFrame(tmp.unstack(), columns=['RV']).reset_index().set_index('timestamp')
-        if full:
-            universe = model_obj.builder(symbol=tmp.columns, df=tmp, F=F)
-            universe = own.groupby(by='level_0').apply(lambda x, universe: x.join(universe, how='inner'), universe)
-            universe = universe.droplevel(axis=0, level=0)
-        else:
-            universe = {symbol: model_obj.builder(symbol=symbol, df=tmp, F=F) for symbol in df.columns}
-            for symbol, df_symbol in universe.items():
-                df_symbol.columns = df_symbol.columns.str.replace(symbol, 'RV')
-                df_symbol['level_0'] = symbol
-            universe = pd.concat(universe.values())
-        universe = universe.rename(columns={'level_0': 'symbol'})
-        return universe

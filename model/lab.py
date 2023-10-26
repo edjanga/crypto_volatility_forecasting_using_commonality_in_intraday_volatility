@@ -19,7 +19,7 @@ import sqlite3
 from statsmodels.regression.rolling import RollingOLS
 import statsmodels.api as sm
 import itertools
-from figures.maker_copy import PlotResults
+from figures.maker import PlotResults
 
 _data_centre_dir = os.path.abspath(__file__).replace('/model/lab.py', '/data_centre/databases')
 
@@ -41,29 +41,31 @@ class DMTest:
     def __init__(self):
         pass
     @staticmethod
-    def table() -> None:
+    def table(L: str) -> None:
         """
             Method computing a matrix with DM statistics for every (i,j) as entries
         """
         regression_per_training_scheme_dd = {'SAM': ['linear', 'lasso', 'elastic', 'pcr', 'lightgbm'],
-                                             #'ClustAM': ['lasso', 'pcr', 'elastic', 'lightgbm'],
+                                             'ClustAM': ['lasso', 'pcr', 'elastic', 'lightgbm'],
                                              'CAM': ['lasso', 'pcr', 'elastic', 'lightgbm']
                                             }
         regression = lambda x, scheme: (scheme, x[scheme])
         model_name = lambda x: '_'.join(x[-2:]) if 'eq' in x else x[-1]
-        for L in ([['6M']]): #['1W'], ['1M'],
+        multi_idx = lambda x: tuple(x.split('_')) if 'eq' not in x \
+                else tuple(x.split('_')[:-2]+['_'.join(x.split('_')[-2:])])
+        for lookback in ([[L]]):
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 futures = [executor.submit(regression, x=regression_per_training_scheme_dd, scheme=scheme) for
                            scheme in list(regression_per_training_scheme_dd.keys())]
                 for future in concurrent.futures.as_completed(futures):
                     scheme, regression_ls = future.result()
-                    for scheme, l, regression in itertools.product([scheme], L, regression_ls):
+                    for scheme, l, regression in itertools.product([scheme], lookback, regression_ls):
                         models = \
                             ''.join(('(', (','.join([f'\"{model}\"' for model in ['ar', 'har', 'har_eq']])), ')'))
                         query = f'SELECT "timestamp", ("y"-"y_hat")*("y"-"y_hat") AS e, "symbol", "L",' \
                                 f'"training_scheme", "model", "regression" FROM ' \
                                 f'(SELECT "timestamp", "y", "y_hat", "symbol", "model", "L", "training_scheme",' \
-                                f'"regression" FROM y_{l} WHERE "training_scheme" = \"{scheme}\" AND ' \
+                                f'"regression", "vol_regime" FROM y_{l} WHERE "training_scheme" = \"{scheme}\" AND ' \
                                 f'"regression" = \"{regression}\" AND "model" IN {models});'
                         try:
                             tmp = pd.read_sql(query, con=DMTest._db_connect_y, chunksize=10_000)
@@ -74,8 +76,10 @@ class DMTest:
                             continue
                         tmp.index = pd.to_datetime(tmp.index, utc=True)
                         tmp.sort_index(inplace=True)
-                        tmp = tmp.assign(tag=['_'.join((training_scheme, L, regression, model)) for training_scheme, L,
-                        regression, model in zip(tmp.training_scheme, tmp.L, tmp.regression, tmp.model)])
+                        tmp = tmp.assign(tag=['_'.join((training_scheme, L, regression, model, vol_regime)) for
+                                              training_scheme, L, regression, model, vol_regime in
+                                              zip(tmp.training_scheme, tmp.L, tmp.regression,
+                                                  tmp.model, tmp.vol_regime)])
                         tmp.drop(['training_scheme', 'L', 'regression', 'model'], axis=1, inplace=True)
                         tmp = tmp.groupby(by=[pd.Grouper(key='symbol')])
                         if 'dm_table' not in locals():
@@ -83,11 +87,13 @@ class DMTest:
                         else:
                             dm_table = \
                                 pd.concat(
-                                    [dm_table, tmp.apply(lambda x: pd.pivot(x[['e', 'tag']],
-                                                                            columns='tag', values='e'))], axis=1
+                                    [dm_table, tmp.apply(
+                                        lambda x: pd.pivot(x[['e', 'tag']],
+                                                           columns='tag', values='e'))], axis=1
                                 )
-            combination_tags = list(itertools.combinations(dm_table.columns.tolist(), r=2))
+            combination_tags = list(itertools.combinations(dm_table.columns.sort_values(ascending=False).tolist(), r=2))
             dm_stats = dict()
+            dm_table.dropna(axis=0, inplace=True)
             return_tag_pair = lambda x: x
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 futures = [executor.submit(return_tag_pair, x=tag_pair) for tag_pair in combination_tags]
@@ -101,52 +107,19 @@ class DMTest:
                         dm_stats[pair] = [dm]
             dm_stats = pd.DataFrame(dm_stats, index=['stats']).transpose()
             dm_stats.reset_index(inplace=True)
+            pdb.set_trace()
             dm_stats = dm_stats.assign(training_scheme=dm_stats['level_0'].str.split('_').apply(lambda x: x[0]),
                                        L=dm_stats['level_0'].str.split('_').apply(lambda x: x[1]),
                                        regression=dm_stats['level_0'].str.split('_').apply(lambda x: x[2]),
                                        model=dm_stats['level_0'].str.split('_').apply(model_name),
                                        training_scheme2=dm_stats['level_1'].str.split('_').apply(lambda x: x[0]),
+                                       L2=dm_stats['level_1'].str.split('_').apply(lambda x: x[1]),
                                        regression2=dm_stats['level_1'].str.split('_').apply(lambda x: x[2]),
-                                       model2=dm_stats['level_1'].str.split('_').apply(model_name))
-            # dm_stats = dm_stats.groupby(by=[pd.Grouper(key='training_scheme'), pd.Grouper(key='L'),
-            #                                 pd.Grouper(key='regression'), pd.Grouper(key='model')])
-            # px.bar
-            # pdb.set_trace()
-            # dm_stats = dm_stats.reset_index(level=-1, names='models')
-        dm_stats.to_csv(os.path.relpath('../figures/dm_stats.csv'))
+                                       model2=dm_stats['level_1'].str.split('_').apply(model_name),
+                                       vol_regime2=dm_stats['level_1'].str.split('_').apply(lambda x: x[-1]))
+        pdb.set_trace()
+        dm_stats.to_csv(os.path.relpath('../results/dm_stats.csv'))
         print(f'[Table]: DM stats table has just been generated.')
-        # dm_table = pd.melt(dm_table, var_name='tag', value_name='values', ignore_index=False)
-        # pdb.set_trace()
-        # dm_table = dm_table.groupby(by=pd.Grouper(level='symbol'))
-
-        # models_dd = dict()
-        # for scheme in ['SAM', 'ClustAM', 'CAM']:
-        #     for regression in regression_per_training_scheme_dd[scheme]:
-        #         for model in ['risk_metrics', 'ar', 'har', 'har_eq']:
-        #             query = f'SELECT "timestamp", ("y"/"y_hat") * ( "y"-"y_hat") AS "e", "symbol" '\
-        #                     f'FROM (SELECT "timestamp", "y", "y_hat", "symbol", "model", "L", "training_scheme",' \
-        #                     f'"regression" FROM y_{L} WHERE "training_scheme" = \"{scheme}\" AND ' \
-        #                     f'"regression" = \"{regression}\" AND "model" = \"{model}\");'
-        #             dm_table = pd.read_sql(query, con=DMTest._db_connect_y, chunksize=10_000)
-        #             dm_table = pd.concat(list(dm_table)).set_index('timestamp')
-        #             dm_table.index = pd.to_datetime(dm_table.index, utc=True)
-        #             dm_table.sort_index(inplace=True)
-        #             dm_table = \
-        #                 dm_table.groupby(by=[dm_table.index, dm_table.symbol], group_keys=True).last().reset_index()
-        #             models_dd[(scheme, L, regression, model)] = \
-        #                 pd.pivot(dm_table, index='timestamp', columns='symbol', values='e')
-        # dm_ls = list()
-        # for model in models_dd.keys():
-        #     row = list()
-        #     for model2 in models_dd.keys():
-        #         tmp = models_dd[model].sub(models_dd[model2]).mean(axis=1)
-        #         try:
-        #             row.append(tmp.mean()/tmp.std())
-        #         except ZeroDivisionError:
-        #             row.append('NaN')
-        #     dm_ls.append(row)
-        # dm = pd.DataFrame(dm_ls, columns=models_dd.keys(), index=models_dd.keys()).round(4)
-        # return dm.loc[:, dm.columns.get_level_values(0).isin([training_scheme])]
 
 
 class Commonality:

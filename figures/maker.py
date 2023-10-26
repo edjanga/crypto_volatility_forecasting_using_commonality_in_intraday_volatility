@@ -168,7 +168,7 @@ class EDA:
 
 
 class PlotResults:
-    _data_centre_dir = os.path.abspath(__file__).replace('/figures/CAM.py', '/data_centre')
+    _data_centre_dir = os.path.abspath(__file__).replace('/figures/maker.py', '/data_centre')
     db_connect_coefficient = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/coefficients.db'))
     db_connect_mse = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/mse.db'))
     db_connect_qlike = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/qlike.db'))
@@ -180,11 +180,11 @@ class PlotResults:
     db_feature_importance = sqlite3.connect(
         database=os.path.abspath(f'{_data_centre_dir}/databases/feature_importance.db'), check_same_thread=False
     )
-    db_pca = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/pca.db'), check_same_thread=False)
-    #db_connect_correlation = sqlite3.connect(database=os.path.abspath('./data_centre/databases/correlation.db'))
+    db_pca = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/pca.db'),
+                             check_same_thread=False)
     colors_ls = px.colors.qualitative.Plotly
-    _models_ls = ['ar', 'har', 'har_eq'] #'risk_metrics'
-    _training_scheme_ls = ['CAM']
+    _models_ls = ['ar', 'har', 'har_eq']
+    _training_scheme_ls = ['SAM', 'ClustAM', 'CAM']
     _L = ['1W', '1M', '6M']
 
     def __init__(self):
@@ -412,8 +412,7 @@ class PlotResults:
                 go.Bar(name=f'{L}', x=tmp.query(f"L == \"{L}\"").variable, y=tmp.query(f"L == \"{L}\"")['values'],
                        marker_color=px.colors.qualitative.Plotly[idx], showlegend=i == 0) for idx, L in
                 enumerate(['1W', '1M', '6M'])
-            ]  #
-            # text=tmp.query(f"L == \"{L}\"")['values'], texttemplate='%{y:.4f}'
+            ]
             fig.add_traces(data=bars, rows=i + 1, cols=1)
         fig.update_xaxes(tickangle=45)
         fig.update_layout(barmode='group')
@@ -461,23 +460,26 @@ class PlotResults:
             fig.show()
 
     @staticmethod
-    def dm_test(save: bool = True) -> None:
-        data = pd.read_csv(os.path.relpath('../figures/dm_stats.csv'))
+    def dm_test(L: str, save: bool = True) -> None:
+        data = pd.read_csv(os.path.relpath('../results/dm_stats.csv'))
+        data = data.query(f'L == \"{L}\"')
+        data2 = data.loc[data.model == 'ar']
+        data = data.loc[data.model != 'ar']
         data = data.assign(x_bar='')
-        fig = px.bar(facet_row='model', facet_col='regression', data_frame=data, x='', y='stats', text='level_1',
-                     title='SAM 6M: Pairwise DM test', facet_row_spacing=0.1, color='regression2',
-                     category_orders={'level_1': ['SAM', 'ClustAM', 'CAM'],
-                                      'regression2': ['lasso', 'elastic', 'lightgbm']}, barmode='group')
-        fig.update_xaxes(title_text='', tickangle=90)
+        fig = px.bar(facet_row='regression', facet_col='model', data_frame=data, x='level_1', y='stats',
+                     text='stats', title=f'SAM {L}: Pairwise DM test (1)', facet_row_spacing=0.1,
+                     category_orders={'model': ['har', 'har_eq'],
+                                      'regression': ['pcr', 'lasso', 'elastic', 'lightgbm']},
+                     facet_col_spacing=0.1, text_auto='.4')
+        fig.update_xaxes(title_text='models', tickangle=90)
         fig.update_yaxes(title_text='')
-        fig.show()
-        pdb.show()
+        fig.update_layout(autosize=False, width=800, height=1500)
+        fig2 = px.bar(data_frame=data2, x='level_1', y='stats', text='stats', title=f'SAM {L}: Pairwise DM test (2)',
+                      text_auto='.4')
+        fig2.update_yaxes(title_text='')
+        fig2.update_xaxes(title_text='models', tickangle=90)
         if save:
-            fig.write_image(os.path.abspath(f'{EDA._figures_dir}/dm_test.pdf'))
+            fig.write_image(os.path.abspath(f'../figures/dm_test_{L}_1.pdf'))
+            fig2.write_image(os.path.abspath(f'../figures/dm_test_{L}_2.pdf'))
         else:
             fig.show()
-
-
-if __name__ == '__main__':
-    plot_result_obj = PlotResults()
-    plot_result_obj.feature_importance()

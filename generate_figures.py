@@ -17,7 +17,7 @@ pio.kaleido.scope.mathjax = None
 
 
 class EDA:
-    _figures_dir = os.path.abspath(__file__).replace('/figures/maker_copy.py', '/figures')
+    _figures_dir = os.path.abspath(__file__).replace('/figures/maker.py', '/figures')
     reader_object = Reader()
     rv = reader_object.rv_read()
     returns = reader_object.returns_read()
@@ -167,7 +167,7 @@ class EDA:
 
 
 class PlotResults:
-    _data_centre_dir = os.path.abspath(__file__).replace('/figures/maker_copy.py', '/data_centre')
+    _data_centre_dir = os.path.abspath(__file__).replace('/figures/maker.py', '/data_centre')
     db_connect_coefficient = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/coefficients.db'))
     db_connect_mse = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/mse.db'))
     db_connect_qlike = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/qlike.db'))

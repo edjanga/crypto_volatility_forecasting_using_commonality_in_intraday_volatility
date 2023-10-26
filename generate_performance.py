@@ -9,15 +9,12 @@ import os
 
 if __name__ == '__main__':
     n_performers = 5
-    performance = pd.read_csv('./performance.csv')
+    performance = pd.read_csv('../results/performance.csv')
     performance = pd.pivot(data=performance,
                            columns=['L', 'training_scheme'],
                            values='values', index=['metric', 'regression', 'model', 'vol_regime']).round(4)
     qlike = performance.index.get_level_values(0) == 'qlike'
-    not_ridge = ~performance.index.get_level_values(1).isin(['ridge'])
-    not_risk_metrics = ~performance.index.get_level_values(2).isin(['risk_metrics'])
-    ranking = \
-        performance.loc[qlike&not_ridge&not_risk_metrics, :].transpose().unstack().unstack().dropna().sort_values()
+    ranking = performance.loc[qlike, :].transpose().unstack().unstack().dropna().sort_values()
     top_performers = ranking.groupby(by=pd.Grouper(level='vol_regime')).apply(lambda x: x.iloc[:n_performers])
     bottom_performers = ranking.groupby(by=pd.Grouper(level='vol_regime')).apply(lambda x: x.iloc[-n_performers:])
     top_performers = pd.DataFrame(top_performers).assign(performer='top')
@@ -43,10 +40,10 @@ if __name__ == '__main__':
     colour_ls = px.colors.qualitative.Plotly[0:3]
     color_discrete_map_dd = {model: colour_ls[0] for model in barplot.index[:n_performers]}
     color_discrete_map_dd.update({model: colour_ls[1] for model in barplot.index[-n_performers:]})
-
-    fig = px.bar(barplot, x='model_name', y='metric', color='vol_regime',
+    barplot = barplot.rename(columns={'vol_regime': 'market_regime'})
+    fig = px.bar(barplot, x='model_name', y='metric', color='market_regime',
                  color_discrete_map=color_discrete_map_dd, text_auto='auto', barmode='group')
     fig.update_xaxes(title='models')
     fig.update_yaxes(title='QLIKE')
-    fig.update_layout(title='QLIKE: Top and bottom 5 performers per volatility regime', showlegend=True)
+    fig.update_layout(title='QLIKE: Top and bottom 5 performers per market regime', showlegend=True)
     fig.write_image(os.path.abspath('../figures/qlike_performance.pdf'))

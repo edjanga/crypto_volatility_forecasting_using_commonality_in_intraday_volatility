@@ -114,3 +114,8 @@ class Reader:
         correlation.name = 'CORR'
         correlation = pd.DataFrame(correlation)
         return correlation
+
+if __name__ == '__main__':
+    reader_obj = Reader()
+    rv = reader_obj.rv_read()
+    pdb.set_trace()

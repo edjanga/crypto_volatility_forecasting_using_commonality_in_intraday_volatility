@@ -2,7 +2,7 @@ import concurrent.futures
 import itertools
 import pdb
 from model.extra_regression_analysis import objective, callback, TrainingSchemeAnalysis
-from figures.maker_copy import PlotResults
+from figures.maker import PlotResults
 import argparse
 
 if __name__ == '__main__':
@@ -19,13 +19,13 @@ if __name__ == '__main__':
     components_analysis_obj = TrainingSchemeAnalysis()
     for training_scheme in ['CAM']:
         components_analysis_obj.training_scheme = training_scheme
-        for L in ['1W']:#'6M', '1M',
+        for L in ['6M', '1M']: #1W
             components_analysis_obj.L = L
             if args.analysis == 'feature_importance':
-                # for model_type in ['har_eq', 'ar', 'har', 'risk_metrics']:
-                #     components_analysis_obj.feature_imp(h='30T', F=F, model_type=model_type,
-                #                                         universe=components_analysis_obj.rv.columns.tolist(),
-                #                                         transformation='log')
+                for model_type in ['har_eq', 'ar', 'har']:
+                    components_analysis_obj.feature_imp(h='30T', F=F, model_type=model_type,
+                                                        universe=components_analysis_obj.rv.columns.tolist(),
+                                                        transformation='log')
                 maker_obj.feature_importance(save=True)
             elif args.analysis == 'coefficient_analysis':
                 components_analysis_obj.coefficient_analysis()
