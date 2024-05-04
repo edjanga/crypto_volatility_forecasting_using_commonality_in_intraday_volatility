@@ -18,7 +18,7 @@ import itertools
 
 
 class EDA:
-    _figures_dir = os.path.abspath(__file__).replace('/figures/CAM.py', '/figures')
+    _figures_dir = os.path.abspath(__file__).replace('/figures/maker.py', '/figures')
     reader_object = Reader()
     rv = reader_object.rv_read()
     returns = reader_object.returns_read()
@@ -47,13 +47,13 @@ class EDA:
 
     def daily_rv(self) -> None:
         daily_rv_df = pd.DataFrame()
-        tmp_df = np.log(self.rv.resample('1D').sum())
+        tmp_df = self.rv.resample('1D').sum()
         daily_rv_df = daily_rv_df.assign(cross_average=tmp_df.mean(axis=1),
                                          percentile05=tmp_df.transpose().quantile(.05),
                                          percentile95=tmp_df.transpose().quantile(.95),
                                          percentile25=tmp_df.transpose().quantile(.25),
                                          percentile75=tmp_df.transpose().quantile(.75))
-        daily_rv_df.ffill(inplace=True)
+        daily_rv_df = daily_rv_df.ffill().mul(np.sqrt(360))
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=daily_rv_df.index, y=daily_rv_df.percentile95, fill=None, mode='lines',
                                  line_color='orange', line={'width': 1, 'dash': 'dash'}, showlegend=False))
@@ -68,14 +68,14 @@ class EDA:
 
         fig.add_trace(go.Scatter(x=daily_rv_df.index, y=daily_rv_df.cross_average, fill=None, mode='lines',
                                  line_color='blue', line={'width': 3}, showlegend=False))
-        fig.update_xaxes(tickangle=45)
-        fig.update_layout(height=500, width=800)
+        fig.update_xaxes(tickangle=45, title_text='Date')
+        fig.update_yaxes(title_text='RV')
+        fig.update_layout(height=500, width=800, title_text='Annualized daily RV')
         fig.write_image(os.path.abspath(f'{EDA._figures_dir}/daily_rv.pdf'))
 
     def intraday_rv(self) -> None:
-        rv_df = np.log(self.rv.resample('30T').sum())
-        rv_df.replace(-np.inf, np.nan, inplace=True)
-        rv_df.ffill(inplace=True)
+        rv_df = self.rv.resample('30T').sum().mul(np.sqrt(pd.to_timedelta('360D')//pd.to_timedelta('30T')))
+        rv_df = rv_df.ffill()
         mean_group = rv_df.mean(axis=1).groupby(by=[rv_df.index.hour, rv_df.index.minute])
         diurnal_rv_df = pd.DataFrame()
         diurnal_rv_df = \
@@ -120,63 +120,65 @@ class EDA:
         fig.add_vline(x=hours_ls.index('21:00'), line_width=2,
                       line_dash='dash', line_color='red', annotation_text='US open',
                       annotation_position='bottom right')
-        fig.update_xaxes(tickangle=45)
-        fig.update_layout(height=500, width=800)
-        fig.write_image(os.path.abspath('./figures/intraday_rv.pdf'))
+        fig.update_xaxes(tickangle=45, title_text='Time')
+        fig.update_yaxes(title_text='RV')
+        fig.update_layout(height=500, width=800, title_text='Annualized intraday RV: Statistics')
+        fig.write_image(os.path.abspath(f'{EDA._figures_dir}/intraday_rv.pdf'))
 
     def daily_mean_correlation_matrix(self) -> None:
-        symbols = self.rv.columns.tolist()
-        corr = self.rv.resample('1D').sum().rolling(3).corr().dropna()
+        corr = self.rv.copy()
+        corr.columns = corr.columns.str.replace('USDT', '')
+        symbols = corr.columns.tolist()
+        corr = corr.resample('1D').sum().rolling(3).corr().dropna()
         corr = corr.values.reshape(corr.shape[0]//corr.shape[1], corr.shape[1], corr.shape[1])
         corr = torch.tensor(corr, dtype=torch.float32)
         corr = torch.mean(corr, 0)
         corr_df = pd.DataFrame(data=corr.detach().numpy(), index=symbols, columns=symbols)
         fig = go.Figure(data=go.Heatmap(z=corr_df.values, x=corr_df.columns, y=corr_df.columns, colorscale='Blues'))
-        fig.update_layout(title='Daily pairwise RV correlation mean.')
+        fig.update_layout(title='Daily pairwise RV correlation mean')
         fig.write_image(os.path.abspath(f'{EDA._figures_dir}/daily_mean_corr_rv.pdf'))
 
     def daily_pairwise_correlation(self) -> None:
-        corr_df = self.rv.resample('1D').sum().rolling(3).corr().dropna()
+        corr_df = self.rv.resample('1D').sum().mul(np.sqrt(360)).rolling(3).corr().dropna()
         corr_ls = corr_df.values.flatten().tolist()
         corr_ls = [corr for _, corr in enumerate(corr_ls) if corr < 1]
         mean_corr = np.mean(corr_ls)
         fig = px.histogram(x=corr_ls, labels={'x': '', 'count': ''},
-                           title='Daily pairwise RV correlation: Distribution',
+                           title='Daily pairwise annualized RV correlation: Distribution',
                            histnorm='probability')
         fig.add_vline(x=mean_corr, line_color='orange')
         fig.update_yaxes(title='')
         fig.write_image(os.path.abspath(f'{EDA._figures_dir}/daily_pairwise_correlation_distribution.pdf'))
 
-    def boxplot(self):
-
-        fig = make_subplots(rows=2, cols=1, row_titles=['Raw RV', 'RV'],
-                            column_titles=['Raw and processed RV: Boxplot.'],
-                            shared_xaxes=True)
+    def boxplot(self, transformation: str = None):
+        if not transformation:
+            fig = make_subplots(rows=1, cols=1, column_titles=['RV: Boxplot'])
+        else:
+            fig = make_subplots(rows=2, cols=1, row_titles=['Raw RV', 'RV'], shared_xaxes=True)
         raw_rv = EDA.reader_object.rv_read(raw=True)
-        raw_rv.index.name = 'Time'
-        raw_rv = pd.melt(raw_rv.reset_index(), var_name='symbol', value_name='values', id_vars='Time')
-        tmp_rv = np.log(self.rv.copy())
-        tmp_rv.index.name = 'Time'
-        tmp_rv = pd.melt(tmp_rv.reset_index(), var_name='symbol', value_name='values', id_vars='Time')
-        for symbol in tmp_rv.symbol.unique().tolist()[:20]:
+        raw_rv.columns = raw_rv.columns.str.replace('USDT', '')
+        raw_rv = pd.melt(raw_rv, var_name='symbol', value_name='values', ignore_index=True)
+        if transformation == 'log':
+            tmp_rv = np.log(self.rv.copy())
+            tmp_rv = pd.melt(tmp_rv.reset_index(), var_name='symbol', value_name='values')
+        for symbol in raw_rv.symbol.unique().tolist()[:20]:
             fig.add_trace(go.Box(y=raw_rv.query(f'symbol == \"{symbol}\"')['values'].tolist(),
                                  name=symbol), row=1, col=1)
-            fig.add_trace(go.Box(y=tmp_rv.query(f'symbol == \"{symbol}\"')['values'].tolist(),
-                                 name=symbol), row=2, col=1)
-        fig.update_layout(showlegend=False)
-        fig.write_image(os.path.abspath(f'{EDA._figures_dir}/boxplot.png'))
+            if transformation == 'log':
+                fig.add_trace(go.Box(y=tmp_rv.query(f'symbol == \"{symbol}\"')['values'].tolist(),
+                                     name=symbol), row=2, col=1)
+        fig.update_layout(showlegend=False,
+                          title_text={True: 'RV: Boxplot',
+                                      False: 'Raw and processed RV: Boxplot.'}[transformation is None])
+        fig.write_image(os.path.abspath(f'{EDA._figures_dir}/boxplot.pdf'))
 
 
 class PlotResults:
     _data_centre_dir = os.path.abspath(__file__).replace('/figures/maker.py', '/data_centre')
-    db_connect_coefficient = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/coefficients.db'))
     db_connect_mse = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/mse.db'))
     db_connect_qlike = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/qlike.db'))
-    db_connect_r2 = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/r2.db'))
     db_connect_y = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/y.db'))
     db_connect_commonality = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/commonality.db'))
-    db_connect_rolling_metrics = \
-        sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/rolling_metrics.db'))
     db_feature_importance = sqlite3.connect(
         database=os.path.abspath(f'{_data_centre_dir}/databases/feature_importance.db'), check_same_thread=False
     )
@@ -184,35 +186,11 @@ class PlotResults:
                              check_same_thread=False)
     colors_ls = px.colors.qualitative.Plotly
     _models_ls = ['ar', 'har', 'har_eq']
-    _training_scheme_ls = ['SAM', 'ClustAM', 'CAM']
+    _training_scheme_ls = ['SAM', 'ClustAM', 'CAM', 'UAM']
     _L = ['1W', '1M', '6M']
 
     def __init__(self):
         pass
-
-    @staticmethod
-    def coefficient(L: str, cross: bool, save: bool, transformation: str, test: bool = False,
-                    models_excl: typing.Union[None, typing.List[str], str] = 'har_csr',
-                    regression_type: str = 'linear'):
-        if isinstance(models_excl, str):
-            models_excl = [models_excl]
-        """
-        Query data
-        """
-        query = f'SELECT * FROM coefficient_{L}_{cross}_{transformation}_{regression_type}'
-        coefficient = pd.read_sql(con=PlotResults.db_connect_coefficient, sql=query, index_col='index') if not test \
-            else pd.read_csv(f'./coefficient_{L}_{cross}_{transformation}_{regression_type}.csv')
-        coefficient = coefficient.query(f'model not in {models_excl}') if models_excl else coefficient
-        """
-        Plot bar plot
-        """
-        fig_title = f'Coefficient {L} {cross} {transformation} {regression_type}: Bar plot'
-        fig = px.bar(coefficient, x='params', y='value', color='model', barmode='group', title=fig_title)
-        if save:
-            fig.write_image(os.path.abspath(f'./figures/figures/coefficient_{L}_{cross}_{transformation}_'
-                                            f'{regression_type}.png'))
-        else:
-            fig.show()
 
     @staticmethod
     def rolling_metrics(L: str, training_scheme: str, save: bool, transformation: str,
@@ -386,7 +364,7 @@ class PlotResults:
         commonality.index = pd.to_datetime(commonality.index, utc=True)
         commonality = commonality.loc[commonality.index.isin(commonality.query('L == "6M"').index), :]
         fig = px.line(commonality, y='values', color='L')
-        commonality = commonality.rename(columns={'L': r'L_train'})
+        commonality = commonality.rename(columns={'L': f'$L_train$'})
         fig_title = r'Commonality for different lookback windows'
         fig = px.line(commonality, y='values', color=r'L_train', title=fig_title)
         fig.update_layout({'xaxis_title': '', 'yaxis_title': 'Commonality'})
@@ -456,30 +434,5 @@ class PlotResults:
         pdb.set_trace()
         if save:
             fig.write_image(os.path.abspath(f'{EDA._figures_dir}/feature_importance.pdf'))
-        else:
-            fig.show()
-
-    @staticmethod
-    def dm_test(L: str, save: bool = True) -> None:
-        data = pd.read_csv(os.path.relpath('../results/dm_stats.csv'))
-        data = data.query(f'L == \"{L}\"')
-        data2 = data.loc[data.model == 'ar']
-        data = data.loc[data.model != 'ar']
-        data = data.assign(x_bar='')
-        fig = px.bar(facet_row='regression', facet_col='model', data_frame=data, x='level_1', y='stats',
-                     text='stats', title=f'SAM {L}: Pairwise DM test (1)', facet_row_spacing=0.1,
-                     category_orders={'model': ['har', 'har_eq'],
-                                      'regression': ['pcr', 'lasso', 'elastic', 'lightgbm']},
-                     facet_col_spacing=0.1, text_auto='.4')
-        fig.update_xaxes(title_text='models', tickangle=90)
-        fig.update_yaxes(title_text='')
-        fig.update_layout(autosize=False, width=800, height=1500)
-        fig2 = px.bar(data_frame=data2, x='level_1', y='stats', text='stats', title=f'SAM {L}: Pairwise DM test (2)',
-                      text_auto='.4')
-        fig2.update_yaxes(title_text='')
-        fig2.update_xaxes(title_text='models', tickangle=90)
-        if save:
-            fig.write_image(os.path.abspath(f'../figures/dm_test_{L}_1.pdf'))
-            fig2.write_image(os.path.abspath(f'../figures/dm_test_{L}_2.pdf'))
         else:
             fig.show()

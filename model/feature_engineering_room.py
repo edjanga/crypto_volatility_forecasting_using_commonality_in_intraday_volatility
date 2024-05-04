@@ -1,12 +1,14 @@
-import os.path
+import datetime
+from dateutil.relativedelta import relativedelta
 import pdb
 import typing
+import numpy as np
 import pandas as pd
 from pytz import timezone
 from dataclasses import dataclass
 from datetime import time
-import numpy as np
 from data_centre.data import Reader
+from scipy.optimize import minimize
 
 
 @dataclass
@@ -39,10 +41,26 @@ class FeatureBuilderBase:
     def __init__(self, name):
         self._name = name
 
-    def builder(self, symbol: typing.Union[typing.Tuple[str], str], df: pd.DataFrame, F: typing.List[str],
-                training_scheme: str):
+    def builder(self, symbol: typing.Union[typing.Tuple[str], str], df: pd.DataFrame, training_scheme: str,
+                **kwargs):
         """To be overwritten by each child class"""
         pass
+
+
+class FeatureRiskMetrics(FeatureBuilderBase):
+
+    _alpha = .94
+
+    def __init__(self):
+        super().__init__('risk_metrics')
+
+    @staticmethod
+    def predict(y: pd.Series, date: datetime) -> pd.Series:
+        yt_hat = y.copy()
+        yt_hat[yt_hat.index.date == date] = np.nan
+        yt_hat[yt_hat.index.date == date] = \
+            ((yt_hat-yt_hat.mean())**2).ewm(alpha=FeatureRiskMetrics._alpha, min_periods=1, adjust=False).mean()[-288:]
+        return yt_hat[yt_hat.index.date == date]
 
 
 class FeatureAR(FeatureBuilderBase):
@@ -89,70 +107,77 @@ class FeatureHAR(FeatureBuilderBase):
 
 class FeatureHAREq(FeatureBuilderBase):
 
+    _markets = Market()
+
     def __init__(self):
         super().__init__('har_eq')
-        self._markets = Market()
 
     @staticmethod
-    def binary_to_odds(df: pd.DataFrame) -> pd.DataFrame:
-        def binary_to_odds_per_series(series: pd.Series) -> pd.Series:
-            count = series.value_counts()
-            tmp = pd.Series(data=count.values, index=count.index[::-1], name=count.name)
-            odds = count.divide(tmp).to_dict()
-            series = pd.Series(data=np.where(series == 1,
-                                             odds[1], odds[0]), index=series.index, name=series.name)
-            return series
-        df = df.apply(lambda x: binary_to_odds_per_series(x))
-        return df
+    def eq_mkt_builder(**kwargs) -> pd.DataFrame:
+        if kwargs is None:
+            return pd.DataFrame()
+        elif kwargs.get('trading_session') == 1:
+            eq_mkt_df = pd.DataFrame(index=kwargs['df'].index)
+            asia_idx = eq_mkt_df.index.tz_convert(FeatureHAREq._markets.asia_tz)
+            asia_uk_idx = \
+                pd.Series(index=asia_idx,
+                          data=False).between_time(time(hour=9, minute=0),
+                                                   time(hour=15, minute=0)).tz_convert(FeatureHAREq._markets.uk_tz)
+            us_idx = eq_mkt_df.index.tz_convert(FeatureHAREq._markets.us_tz)
+            us_uk_idx = \
+                pd.Series(index=us_idx,
+                          data=False).between_time(time(hour=9, minute=30),
+                                                   time(hour=16, minute=0)).tz_convert(FeatureHAREq._markets.uk_tz)
+            eu_idx = \
+                pd.Series(index=eq_mkt_df.index,
+                          data=False).between_time(time(hour=8, minute=0),
+                                                   time(hour=16, minute=30)).tz_convert(FeatureHAREq._markets.uk_tz)
+            eq_mkt_df = eq_mkt_df.assign(ASIAN_SESSION=False, US_SESSION=False, EUROPE_SESSION=False)
+            eq_mkt_df.loc[asia_uk_idx.index, 'ASIAN_SESSION'] = True
+            eq_mkt_df.loc[us_uk_idx.index, 'US_SESSION'] = True
+            eq_mkt_df.loc[eu_idx.index, 'EUROPE_SESSION'] = True
+            eq_mkt_df[['ASIAN_SESSION', 'US_SESSION', 'EUROPE_SESSION']] = \
+                eq_mkt_df[['ASIAN_SESSION', 'US_SESSION', 'EUROPE_SESSION']].astype(int)
+        else:
+            top_of_book = {True: '_0', False: ''}
+            eq_mkt_df = kwargs['vixm'].filter(regex=f'VIXM{top_of_book[kwargs["top_book"]]}')
+            for _, lookback in enumerate(kwargs['F']):
+                offset = FeatureHAREq._lookback_window_dd[lookback]
+                if FeatureHAREq._5min_buckets_lookback_window_dd[lookback] <= 288:
+                    eq_mkt_df = \
+                        eq_mkt_df.join(eq_mkt_df.filter(regex=f'VIXM_[0-9]$').rolling(offset + 1,
+                                                                                      closed='both').mean().shift(),
+                                       how='left', rsuffix=f'_{lookback}')
+                else:
+                    eq_mkt_df = eq_mkt_df.join(eq_mkt_df.filter(regex=f'VIXM_[0-9$]$').resample(offset).mean().shift(),
+                                               how='left', rsuffix=f'_{lookback}')
+        return eq_mkt_df.interpolate(method='linear', limit_direction='forward').dropna()
 
-    def builder(self, symbol: typing.Union[typing.Tuple[str], str], df: pd.DataFrame,
-                F: typing.List[str], odds=False)\
-            -> pd.DataFrame:
-        """
-            Odds instead of binary to allow for log transformation.
-        """
+    def builder(self, df: pd.DataFrame, symbol: typing.Union[typing.Tuple[str], str], F: typing.List[str],
+                **kwargs) -> pd.DataFrame:
         if isinstance(symbol, str):
             symbol = (symbol, symbol)
         list_symbol = list(dict.fromkeys(symbol).keys())
         symbol_df = df[list_symbol].copy()
         for _, lookback in enumerate(F):
-            offset = self._lookback_window_dd[lookback]
-            if self._5min_buckets_lookback_window_dd[lookback] <= 288:
+            offset = FeatureHAREq._lookback_window_dd[lookback]
+            if FeatureHAREq._5min_buckets_lookback_window_dd[lookback] <= 288:
                 symbol_df = symbol_df.join(symbol_df[list_symbol].rolling(offset + 1, closed='both').mean().shift(),
                                            how='left', rsuffix=f'_{lookback}')
             else:
-                symbol_df = \
-                    symbol_df.join(symbol_df[list_symbol].resample(offset).mean().shift(),
-                                   how='left', rsuffix=f'_{lookback}')
-        symbol_df.ffill(inplace=True)
-        symbol_df.dropna(inplace=True)
-        asia_idx = symbol_df.index.tz_convert(self._markets.asia_tz)
-        asia_uk_idx = \
-            pd.Series(index=asia_idx,
-                      data=False).between_time(time(hour=9, minute=0),
-                                               time(hour=15, minute=0)).tz_convert(self._markets.uk_tz)
-        us_idx = symbol_df.index.tz_convert(self._markets.us_tz)
-        us_uk_idx = \
-            pd.Series(index=us_idx,
-                      data=False).between_time(time(hour=9, minute=30),
-                                               time(hour=16, minute=0)).tz_convert(self._markets.uk_tz)
-        eu_idx = \
-            pd.Series(index=symbol_df.index,
-                      data=False).between_time(time(hour=8, minute=0),
-                                               time(hour=16, minute=30)).tz_convert(self._markets.uk_tz)
-        symbol_df = symbol_df.assign(ASIAN_SESSION=False, US_SESSION=False, EUROPE_SESSION=False)
-        symbol_df.loc[asia_uk_idx.index, 'ASIAN_SESSION'] = True
-        symbol_df.loc[us_uk_idx.index, 'US_SESSION'] = True
-        symbol_df.loc[eu_idx.index, 'EUROPE_SESSION'] = True
-        symbol_df[['ASIAN_SESSION', 'US_SESSION', 'EUROPE_SESSION']] = \
-            symbol_df[['ASIAN_SESSION', 'US_SESSION', 'EUROPE_SESSION']].astype(int)
-        symbol_df.dropna(inplace=True)
-        symbol_df = symbol_df.loc[~symbol_df.index.duplicated(), :]
-        if odds:
-            tmp_odds = symbol_df[['ASIAN_SESSION', 'US_SESSION', 'EUROPE_SESSION']].groupby(
-                by=symbol_df.index.date).apply(lambda x: FeatureHAREq.binary_to_odds(x))
-            tmp_odds = tmp_odds.droplevel(0, 0)
-            symbol_df[['ASIAN_SESSION', 'US_SESSION', 'EUROPE_SESSION']] = \
-                tmp_odds[['ASIAN_SESSION', 'US_SESSION', 'EUROPE_SESSION']]
-        return symbol_df
-
+                symbol_df = symbol_df.join(symbol_df[list_symbol].resample(offset).mean().shift(),
+                                           how='left', rsuffix=f'_{lookback}')
+        symbol_df = symbol_df.ffill()
+        symbol_df = symbol_df.dropna()
+        if 'vixm' in kwargs.keys():
+            if kwargs.get('trading_session') == 1:
+                kwargs.update({'df': symbol_df})
+            else:
+                kwargs.update({'F': F})
+            eq_mkt_df = FeatureHAREq.eq_mkt_builder(**kwargs)
+            try:
+                symbol_df = symbol_df.join(eq_mkt_df, how='left')
+            except ValueError:
+                pass
+            symbol_df = symbol_df.fillna(symbol_df.ewm(span=12, min_periods=1).mean())
+        return symbol_df.dropna()

@@ -185,7 +185,7 @@ class TrainingSchemeAnalysis:
                   f'has been inserted.')
 
     def feature_imp_per_date(self, model_type: str, date: datetime, symbol: str, feature_imp_per_symbol: pd.DataFrame,
-                             df: pd.DataFrame, transformation: str = 'log'):
+                             df: pd.DataFrame, transformation: str = None):
         train_index = list(set(df.index[(df.index.date >= date - L_train) & (df.index.date < date)]))
         train_index.sort()
         test_index = list(set(df.index[df.index.date == date]))
