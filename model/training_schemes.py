@@ -28,7 +28,8 @@ import pytz
 from data_centre.data import Reader
 
 DEVICE = 'cpu'
-
+if torch.cuda.is_available():
+    DEVICE = 'cuda'
 """
     List of constant variables used in the script
 """
