@@ -1,6 +1,6 @@
 #!/bin/bash
 clear
-sqlite3 -header -csv "../data_centre/databases/r2.db" < ../sql_scripts/performance.sql > ../results/performance.csv
 source ../venv/bin/activate
-python3 ../generate_performance.py
+sqlite3 -header -csv "../data_centre/databases/qlike.db" < ../sql_scripts/performance.sql > ../results/performance.csv
+python3 ../generate_performance.py --n_performers=1 --bottom_performers=0
 deactivate
