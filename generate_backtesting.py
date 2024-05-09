@@ -1,3 +1,5 @@
+import concurrent.futures
+import datetime
 import glob
 import pdb
 import pandas as pd
@@ -9,6 +11,7 @@ from plotly.subplots import make_subplots
 from data_centre.data import DBQuery
 import os
 from data_centre.data import OptionChainData
+from model.lab import qlike_score
 import argparse
 from arch import arch_model
 from data_centre.data import Reader
@@ -78,21 +81,34 @@ class OptionTrader:
             ls.append(tmp)
         return tuple(ls)
 
+    def fit_garch(self, date: datetime.datetime, L_train: dict, L: str, returns: pd.DataFrame,
+                  GARCH: pd.DataFrame) -> None:
+        start = (date - relativedelta(days=L_train[L])).strftime('%Y-%m-%d')
+        print(f'[Start Training]: GARCH model^{L} training on {date} has started.')
+        GARCH_model = arch_model(y=returns.loc[start:date.strftime('%Y-%m-%d')].values.reshape(-1),
+                                 vol='GARCH', p=1, q=1, mean='Constant', rescale=True)
+        GARCH_model = GARCH_model.fit(update_freq=0, disp=False)
+        rv_hat = \
+            GARCH_model.forecast(horizon=pd.to_timedelta('1D') // pd.to_timedelta(h)).variance.values[-1, :]
+        rv_hat = rv_hat.reshape(rv_hat.shape[0], 1) / GARCH_model.scale ** 2
+        GARCH.loc[date.strftime('%Y-%m-%d'):date.strftime('%Y-%m-%d')] = rv_hat
+        print(f'[End of Training]: GARCH model^{L} training on {date} has been completed.')
+
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Script backtesting option trading strategies.')
     parser.add_argument('--liquidity', default=.75, type=float, help='Threshold of liquid to keep for backtesting.')
-    parser.add_argument('--performance', default='greeks', type=str,
+    parser.add_argument('--performance', default='returns', type=str,
                         help='Ways to compute P&L: greeks or return based.')
     parser.add_argument('--min_expiration', type=str, help='Minimum expiration to filter option chain data.',
-                        default='15D')
+                        default='7D')
     parser.add_argument('--max_expiration', type=str, help='Maximum expiration to filter option chain data.',
                         default='180D')
     parser.add_argument('--min_moneyness', type=float, help='Minimum moneyness to filter option chain data.',
-                        default=.75)
+                        default=.85)
     parser.add_argument('--max_moneyness', type=float, help='Maximum moneyness to filter option chain data.',
-                        default=1.25)
+                        default=1.15)
     parser.add_argument('--to_latex', type=int, help='Print out final table as LaTeX table or not.',
                         default=0)
     parser.add_argument('--h', type=str, help='Time interval.', default='30T')
@@ -103,7 +119,7 @@ if __name__ == '__main__':
     liquidity = args.liquidity
     min_moneyness = args.min_moneyness
     max_moneyness = args.max_moneyness
-    # db_obj = DBQuery()
+    db_obj = DBQuery()
     option_trader_obj = OptionTrader(fees=.0004)
     option_chain_data_obj = OptionChainData()
     files = [file for file in glob.glob('../data_centre/tmp/datasets/*-*-*')]
@@ -124,6 +140,7 @@ if __name__ == '__main__':
         option_trader_obj.process_mkt_data(data=data, option_type='put')
     returns = option_trader_obj.reader_obj.returns_read(symbol='ETHUSDT').replace(0, np.nan)
     returns = returns.fillna(returns.ewm(span=12, min_periods=1).mean())
+    rv = option_trader_obj.reader_obj.rv_read(symbol='ETHUSDT')
     if args.performance == 'greeks':
         calls_strike_price, calls_mark_price, calls_underlying_price, calls_delta, \
         calls_gamma, calls_vega, calls_theta, calls_rho, calls_expiration, calls_dt, calls_mark_iv = \
@@ -143,102 +160,97 @@ if __name__ == '__main__':
         calls_PnL, puts_PnL = np.log(calls_mark_price.div(calls_mark_price.shift())),\
             np.log(puts_mark_price.div(puts_mark_price.shift()))
     straddle_ls = list(set(calls_PnL.columns).intersection(set(puts_PnL.columns)))
-    PnL = calls_PnL.filter(regex=f'{"|".join(straddle_ls)}') + puts_PnL.filter(regex=f'{"|".join(straddle_ls)}')
+    # PnL = calls_PnL.filter(regex=f'{"|".join(straddle_ls)}') + puts_PnL.filter(regex=f'{"|".join(straddle_ls)}')
+    PnL = \
+        calls_mark_price.filter(regex=f'{"|".join(straddle_ls)}') + \
+        puts_mark_price.filter(regex=f'{"|".join(straddle_ls)}')
     straddles = (calls_PnL.filter(regex=f'{"|".join(straddle_ls)}').fillna(0) != 0) + \
                 (puts_PnL.filter(regex=f'{"|".join(straddle_ls)}').fillna(0) != 0)
-    PnL = straddles * PnL if args.performance == 'returns' else straddles * PnL.diff()
-    PnL = (PnL - np.abs(PnL) * (1 - option_trader_obj.fees)).mean(axis=1)
-    # qlike = \
-    #     db_obj.query_data(db_obj.best_model_for_all_windows_query('qlike'), table='qlike').sort_values(by='L',
-    #                                                                                                    ascending=True)
+    PnL = np.log(PnL.div(PnL.shift())).replace(0, np.nan)
+    PnL = (PnL - np.abs(PnL) * option_trader_obj.fees).mean(axis=1)
+    qlike = \
+        db_obj.query_data(db_obj.best_model_for_all_windows_query('qlike'), table='qlike').sort_values(by='L',
+                                                                                                       ascending=True)
     suffix_name = \
         {'trading_session': {True: 'eq', False: 'eq_vixm'}, 'top_book': {True: 'top_book', False: 'full_book'}}
     PnL_per_strat = dict()
     trades_per_strat = dict()
     rv_models = dict()
+    qlike_models = dict()
     rv_GARCH = dict()
-    qlike = pd.DataFrame({'L': ['1W', '1M', '6M']})
+    qlike_GARCH = dict()
     L_train = {'1W': 7, '1M': 30, '6M': 180}
     for idx1, row in qlike.iterrows():
         L = row['L']
-        # model, regression, training_scheme, trading_session, top_book, h = row['model'], row['regression'], \
-        #     row['training_scheme'], row['trading_session'], row['top_book'], row['h']
-        # y_hat = db_obj.forecast_query(L=L, model=model, regression=regression, trading_session=trading_session,
-        #                               top_book=top_book, training_scheme=training_scheme)[['y_hat', 'symbol']]
-        # y_hat = pd.pivot(data=y_hat, columns='symbol', values='y_hat')[['ETHUSDT']]
-        # y_hat.index = pd.to_datetime(y_hat.index)
-        # y_hat = y_hat.resample(h).sum()
-        # y_hat = y_hat.rename(columns={'ETHUSDT': 'sig'})
-        # rv_models[('$\mathcal{M}$', L.lower())] = y_hat
-        # dates = list(set(np.unique(y_hat.index.date).tolist()))
-        # dates.sort()
+        model, regression, training_scheme, trading_session, top_book, h = row['model'], row['regression'], \
+            row['training_scheme'], row['trading_session'], row['top_book'], row['h']
+        y_hat = db_obj.forecast_query(L=L, model=model, regression=regression, trading_session=trading_session,
+                                      top_book=top_book, training_scheme=training_scheme)[['y_hat', 'symbol']]
+        perf = db_obj.forecast_performance(L=L, model=model, regression=regression, training_scheme=training_scheme,
+                                           trading_session=trading_session, top_book=top_book)
+        y_hat = y_hat.query('symbol == "ETHUSDT"')
+        y_hat = pd.pivot(data=y_hat, columns='symbol', values='y_hat')
+        y_hat.index = pd.to_datetime(y_hat.index)
+        y_hat = y_hat.resample(h).sum()
+        y_hat = y_hat.rename(columns={'ETHUSDT': 'sig'})
+        rv_models[('$\mathcal{M}$', L.lower())] = y_hat
+        qlike_models[('$\mathcal{M}$', L.lower())] = \
+            perf.query('symbol=="ETHUSDT"')[['values']].rename(columns={'values': ('$\mathcal{M}$', L.lower())})
+        dates = list(set(np.unique(y_hat.index.date).tolist()))
+        dates.sort()
         ################################################################################################################
         ### Fitting GARCH(1,1)
         ################################################################################################################
-        if 'y_hat' in vars():
-            GARCH = pd.DataFrame(index=y_hat.index, columns=['sig'], data=np.nan)
-        else:
-            h = '30T'
-            dates = list(np.unique(returns.index.date))
-            GARCH = pd.DataFrame(index=pd.date_range(start=returns.index[0].date(),
-                                                     end=returns.index[-1].date()+relativedelta(days=1),
-                                                     freq=h, inclusive='left'), columns=['sig'], data=np.nan)
-        for idx, date in enumerate(dates[:5]):
-            if (idx == 0) | training_freq(date, '1D'):
-                start = (date - relativedelta(days=L_train[L])).strftime('%Y-%m-%d')
-                print(f'[Start Training]: GARCH model^{L} training on {date} has started.')
-                GARCH_model = \
-                    arch_model(y=returns.loc[start:date.strftime('%Y-%m-%d')].values.reshape(-1),
-                               vol='GARCH', p=1, q=1, mean='Constant', rescale=True)
-                GARCH_model = GARCH_model.fit(update_freq=0, disp=False)
-                rv_hat = \
-                    GARCH_model.forecast(horizon=pd.to_timedelta('1D') // pd.to_timedelta(h)).variance.values[-1, :] #{L_train}
-                rv_hat = rv_hat.reshape(rv_hat.shape[0], 1)/GARCH_model.scale**2
-                # GARCH.loc[date.strftime('%Y-%m-%d'):(date+relativedelta(days=L_train-1)).strftime('%Y-%m-%d')] = \
-                #     rv_hat[:min(rv_hat.shape[0],
-                #                 GARCH.loc[date.strftime('%Y-%m-%d'):
-                #                           (date+relativedelta(days=L_train-1)).strftime('%Y-%m-%d')].shape[0])]
-                GARCH.loc[date.strftime('%Y-%m-%d')] = rv_hat
-                print(f'[End of Training]: GARCH model^{L} training on {date} has been completed.')
+        GARCH = pd.DataFrame(index=pd.date_range(start=returns.index[0].date(),
+                                                 end=returns.index[-1].date()+relativedelta(days=1),
+                                                 freq=h, inclusive='left'), columns=['sig'], data=np.nan)
+        GARCH.index = pd.to_datetime(GARCH.index, utc=True)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(option_trader_obj.fit_garch, date=date,
+                                       returns=returns.loc[y_hat.index],
+                                       L_train=L_train, L=L, GARCH=GARCH) for date in dates]
         rv_GARCH[('GARCH', L.lower())] = GARCH
+        qlike_models[('GARCH', L.lower())] = \
+            pd.DataFrame(pd.concat([rv.resample(h).sum(), GARCH],
+                                   axis=1).loc[y_hat.index, :].resample('1W')[['ETHUSDT', 'sig']].apply(qlike_score),
+                         columns=[('GARCH', L.lower())])
+    # perf_qlike = pd.DataFrame()
+    # for _, perf in qlike_models.items():
+    #     if perf_qlike.empty:
+    #         perf_qlike = perf.copy()
+    #     else:
+    #         perf_qlike = perf_qlike.join(perf, how='outer')
+    # perf_qlike.columns = pd.MultiIndex.from_tuples(perf_qlike.sort_index(axis=1).columns)
+    # perf_qlike = perf_qlike.loc[perf_qlike.index.duplicated(), :]
+    # pdb.set_trace()
+    # if L == '6M':
+    #     pdb.set_trace()
+    #     pd.concat(qlike_models.values(), axis=1).sort_index(axis=1)
+    # pdb.set_trace()
+    # qlike_models = pd.concat(qlike_models.values()).sort_index(axis=1)
     ########################################################################################################
     ### Signals
     ########################################################################################################
-    try:
-        signals = \
-            pd.concat(rv_models, axis=1).droplevel(axis=1, level=2).join(pd.concat(rv_GARCH, axis=1).droplevel(axis=1,
-                                                                                                               level=2))
-    except Exception as e:
-        print(e)
-        signals = pd.concat(rv_GARCH, axis=1)
-        signals.index = pd.to_datetime(signals.index, utc=True)
-    signals = (signals.fillna(signals.expanding().mean())**.5)
-    signals = signals.sub(signals.mean()).div(signals.std()).gt(2).mul(-1) + \
-              signals.sub(signals.mean()).div(signals.std()).lt(-2)
+    signals = \
+        pd.concat(rv_models, axis=1).droplevel(axis=1, level=2).join(pd.concat(rv_GARCH, axis=1).droplevel(axis=1,
+                                                                                                           level=2))**.5
+    signals = np.sign(signals.diff()).fillna(0).astype(int)
     signals = signals.apply(lambda x: x.where(x != x.shift(), 0)).shift()
-    # signals = (signals + signals.shift()).applymap(lambda x: x / x if abs(x) > 1 else x)
     signals = signals.reindex(index)
-    if 'PnL' in vars():
-        PnL_per_strat = signals.apply(lambda x, y: x*y, y=PnL).resample('1D')
-        ethPnL = pd.DataFrame(data=np.nan, index=PnL_per_strat.indices.keys(),
-                              columns=pd.MultiIndex.from_product([['ETH'],
-                                                                  signals.columns.get_level_values(1).unique().tolist()]))
-    else:
-        ethPnL = pd.DataFrame(data=np.nan, index=np.unique(signals.index.date).tolist(),
-                              columns=pd.MultiIndex.from_product([['ETH'],
-                                                                  signals.columns.get_level_values(1).unique().tolist()]))
+    PnL_per_strat = signals.apply(lambda x, y: x*y, y=PnL).resample('1D')
+    ethPnL = pd.DataFrame(data=np.nan, index=PnL_per_strat.indices.keys(),
+                          columns=pd.MultiIndex.from_product([['ETH'],
+                                                              signals.columns.get_level_values(1).unique().tolist()]))
     ethPnL.iloc[:, 0] = returns.resample('1D').sum().values
     ethPnL.loc[ethPnL.iloc[:, 0].first_valid_index()] = \
         ethPnL.loc[ethPnL.iloc[:, 0].first_valid_index()]-.001*np.abs(ethPnL.loc[ethPnL.iloc[:, 0].first_valid_index()])
     ethPnL = ethPnL.ffill(axis=1)
-    ethPnL.loc[:signals.apply(lambda x:x.first_valid_index())[0].date(), :] = np.nan
-    try:
-        PnL_per_strat = pd.concat([PnL_per_strat.sum(), ethPnL], axis=1)
-    except Exception as e:
-        print(e)
-        PnL_per_strat = ethPnL.copy()
+    ethPnL.loc[:signals.apply(lambda x:x.first_valid_index())[0], :] = 0
+    PnL_per_strat = pd.concat([PnL_per_strat.sum(), ethPnL], axis=1)
     Bt = np.abs(signals.apply(lambda x, y: x*y.sum(axis=1), y=straddles).resample('1D').sum())
+    Tt = np.abs(signals).sum(axis=1).resample('1D').sum()
     PPD_per_strat = PnL_per_strat.iloc[:, :-3].sum().div(Bt).replace(-np.inf, np.nan).replace(np.inf, np.nan).mean()
+    PPT_per_strat = PnL_per_strat.iloc[:, :-3].apply(lambda x, y: x.div(y), y=Tt).replace(np.inf, np.nan).mean()
     ################################################################################################################
     ### Backtesting
     ################################################################################################################
@@ -264,8 +276,15 @@ if __name__ == '__main__':
     PPD_per_strat = PPD_per_strat.dropna(axis=1)
     print(PPD_per_strat)
     print('---------*********-------------\n')
-    PnL_per_strat = PnL_per_strat.fillna(0).cumsum().add(100) if args.performance == 'greeks' else \
-        PnL_per_strat.fillna(0).add(1).cumprod().mul(100)
+    print('---------PPT table-------------')
+    PPT_per_strat = PPT_per_strat.reset_index().set_index(['level_0', 'level_1']).transpose()
+    PPT_per_strat.columns.names = [None, None]
+    PPT_per_strat = PPT_per_strat.loc[:, [('GARCH', '1w'), ('GARCH', '1m'), ('GARCH', '6m'),
+                                          (r'$\mathcal{M}$', '1w'), (r'$\mathcal{M}$', '1m'), (r'$\mathcal{M}$', '6m')]]
+    PPT_per_strat = PPT_per_strat.dropna(axis=1)
+    print(PPT_per_strat)
+    print('---------*********-------------\n')
+    PnL_per_strat = PnL_per_strat.fillna(0).cumsum()
     PnL_per_strat = PnL_per_strat.unstack().reset_index().rename(columns={'level_0': 'Strategy',
                                                                           'level_1': r'$L_{train}$',
                                                                           0: 'PnL'})
@@ -279,7 +298,6 @@ if __name__ == '__main__':
             straddles.apply(lambda x, y: x * y, y=signals.iloc[:, i]).fillna(0).apply(
                 lambda x: x.value_counts()).drop(0.0).sum(axis=1)
     numberTrades = pd.concat(numberTrades, axis=1).fillna(0).astype(int)
-    pdb.set_trace()
     numberTrades = numberTrades.loc[:, [('GARCH', '1w'), ('GARCH', '1m'), ('GARCH', '6m'),
                                         (r'$\mathcal{M}$', '1w'), (r'$\mathcal{M}$', '1m'),
                                         (r'$\mathcal{M}$', '6m')]]
@@ -311,16 +329,17 @@ if __name__ == '__main__':
     fig2.update_yaxes(title_text='PnL')
     fig2.update_layout(title_text=f'Cumulative P&L curves', width=1_200, height=800)
     if args.save == 1:
-        fig.write_image(os.path.abspath(f'./figures/sharpe_ratio_{args.performance}.pdf'))
+        fig.write_image(os.path.abspath(f'../figures/sharpe_ratio_{args.performance}.pdf'))
         print(f'[Figures]: Sharpe ratio has been saved.')
-        fig2.write_image(os.path.abspath(f'./figures/pnl_{args.performance}.pdf'))
+        fig2.write_image(os.path.abspath(f'../figures/pnl_{args.performance}.pdf'))
         print(f'[Figures]: PnL has been saved.')
     else:
         fig.show()
         fig2.show()
-    # print('---------PPD table to LaTex-------------')
-    # print(PPD_per_strat.to_latex())
-    # print('---------************************-----\n')
-    # print('---------Number of trade table to LaTex-------------')
-    # print(numberTrades.to_latex())
-    # print('---------****************************-------------\n')
+    print('---------PPD table to LaTex-------------')
+    print(PPD_per_strat.to_latex())
+    print('---------************************-----\n')
+    print('---------Number of trade table to LaTex-------------')
+    print(numberTrades.to_latex())
+    print('---------****************************-------------\n')
+    pdb.set_trace()

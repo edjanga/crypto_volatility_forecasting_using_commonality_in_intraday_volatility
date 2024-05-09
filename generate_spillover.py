@@ -27,9 +27,6 @@ if __name__ == '__main__':
     ################################################################################################################
     spillover_effect = dict()
     degrees = dict()
-    # fig = make_subplots(rows=3, cols=1, specs=[[{'type': 'polar'}], [{'type': 'polar'}], [{'type': 'polar'}]],
-    #                     row_titles=[f'${L.lower()}$' for L in ['1W', '1M', '6M']],
-    #                     vertical_spacing=.1)
     fig = make_subplots(rows=1, cols=3, specs=[[{'type': 'polar'}, {'type': 'polar'}, {'type': 'polar'}]],
                         column_titles=[f'${L.lower()}$' for L in ['1W', '1M', '6M']],
                         horizontal_spacing=.1, column_widths=[.33, .33, .33])
@@ -124,7 +121,10 @@ if __name__ == '__main__':
             trace.update(marker=dict(cmax=max(net_transmission_values), cmin=min(net_transmission_values),
                                      color=trace.customdata, colorscale="Viridis",
                                      colorbar=dict(title='Net Transmitter/Receiver', len=0.3, x=-.5)))
-    fig.update_layout(showlegend=True, title='Connectedness network: Overview')
+    fig.update(layout=dict(showlegend=True, title='Connectedness network: Overview'),
+               annotation=dict(font_size=20))
+    # fig['layout'].update(margin=dict(l=0,r=0,b=0,t=0))
+    # fig.update_annotations(font_size=20)
     spillover_effect = pd.concat(spillover_effect).reset_index()
     spillover_effect['level_1'] = pd.to_datetime(spillover_effect['level_1'], utc=True)
     spillover_effect = spillover_effect.set_index(['level_0', 'level_1']).groupby(
@@ -136,6 +136,6 @@ if __name__ == '__main__':
     fig2 = px.line(spillover_effect, y='Spillover Index', color='$L_{train}$', title='Total Spillover Index')
     fig2.update_xaxes(title_text='Date', tickangle=45)
     fig.show()
-    # fig.write_image(os.path.abspath(f'./figures/spillover_network.pdf'))
+    fig.write_image(os.path.abspath(f'./figures/spillover_network.pdf'))
     fig2.write_image(os.path.abspath(f'./figures/spillover_total_index.pdf'))
     print(f'[Figures]: Spillover network and total index have been saved.')

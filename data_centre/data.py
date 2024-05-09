@@ -283,7 +283,7 @@ class DBQuery:
 
     @staticmethod
     def forecast_query(L: str, model: str, regression: str, training_scheme: str,
-                       trading_session: int = None, top_book: int = None, test: bool=False) -> pd.DataFrame:
+                       trading_session: int = None, top_book: int = None) -> pd.DataFrame:
         query = f'SELECT "y_hat", "L", "vol_regime", "model", "regression", "trading_session", "top_book"'\
                 f',"timestamp","symbol" ' \
                 f'FROM y_{L} ' \
@@ -294,7 +294,7 @@ class DBQuery:
             query = ' AND '.join((query, f'"trading_session"={trading_session}'))
         if isinstance(top_book, int) & (model == 'har_eq'):
             query = ' AND '.join((query, f'"top_book"={top_book}'))
-        query = ';'.join((query, '')) if test else ''.join((query, ' LIMIT 10;'))
+        query = ';'.join((query, ''))
         return pd.read_sql(sql=query, con=DBQuery._db_connect_y, index_col='timestamp')
 
     @staticmethod
@@ -336,16 +336,11 @@ class DBQuery:
 
 
 if __name__ == '__main__':
-    # parser = argparse.ArgumentParser(description='Script handling various datasets used in this project.')
-    # parser.add_argument('--multithreading', default=1, type=int, help='Use multithreading to fetch data.')
-    # parser.add_argument('--start_date', type=str, help='Start date to fetch data from.')
-    # parser.add_argument('--end_date', type=str, help='End date to fetch data to (exclusive).')
-    # args = parser.parse_args()
-    # option_chain_data_obj = OptionChainData()
-    # option_chain_data_obj.download_option_chain_data(multithreading=args.multithreading, start_date=args.start_date,
-    #                                                  end_date=args.end_date)
-    data_obj = Reader()
-    eth = data_obj.prices_read('ETHUSDT')
-    eth = np.log(eth.div(eth.shift())).resample('30T').sum()
-    eth.iloc[0] = np.nan
-    pdb.set_trace()
+    parser = argparse.ArgumentParser(description='Script handling various datasets used in this project.')
+    parser.add_argument('--multithreading', default=1, type=int, help='Use multithreading to fetch data.')
+    parser.add_argument('--start_date', type=str, help='Start date to fetch data from.')
+    parser.add_argument('--end_date', type=str, help='End date to fetch data to (exclusive).')
+    args = parser.parse_args()
+    option_chain_data_obj = OptionChainData()
+    option_chain_data_obj.download_option_chain_data(multithreading=args.multithreading, start_date=args.start_date,
+                                                     end_date=args.end_date)
