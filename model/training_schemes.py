@@ -813,7 +813,6 @@ class UAM(TrainingScheme):
     def add_metrics(self, regression_type: str, transformation: str, agg: str, df: pd.DataFrame, **kwargs) -> None:
         self._regression_type = regression_type
         self._transformation = transformation
-        # rv_mkt = self.volatility_period(df.loc[:, ~df.columns.str.contains('VIXM')])
         try:
             rv_mkt = self.volatility_period(df.loc[:, ~df.columns.str.contains('VIXM')])
         except ValueError:
