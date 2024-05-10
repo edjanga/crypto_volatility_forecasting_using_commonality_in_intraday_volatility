@@ -19,7 +19,7 @@ from model.feature_engineering_room import FeatureAR, FeatureHAR, FeatureRiskMet
 import numpy as np
 import optuna
 from model.lab import training_freq, train_model, split_train_valid_set, lags, scaling, inverse_scaling,\
-    LSTM_NNModel, VAR_Model, qlike_score, reshape_dataframe
+    LSTM_NNModel, qlike_score, reshape_dataframe #VAR_Model
 import torch
 from torch.utils.data import DataLoader
 from optuna.samplers import RandomSampler
@@ -109,16 +109,6 @@ class TrainingScheme(object):
         self._universe = universe
         self._feature_importance = dict()
         self._feature_importance_symbol = dict([(symbol, None) for symbol in universe])
-        # max_feature_building_lookback = \
-        #     max([pd.to_timedelta(lookback) // pd.to_timedelta(self._b) if 'M' not in lookback else
-        #          pd.to_timedelta(''.join((str(30 * int(lookback.split('M')[0])), 'D'))) // pd.to_timedelta(self._b)
-        #          for _, lookback in enumerate(self._F)])
-        # upper_bound_feature_building_lookback = \
-        #     pd.to_timedelta(''.join((str(30 * int(self.L.split('M')[0])), 'D'))) // pd.to_timedelta(self._b) \
-        #         if 'M' in self._L else pd.to_timedelta(self._L) // pd.to_timedelta(self._b)
-        # if upper_bound_feature_building_lookback < max_feature_building_lookback:
-        #     raise ValueError('Lookback window for model training is smaller than the furthest lookback window '
-        #                      'in feature building.')
         if model_type not in TrainingScheme._factory_model_type_dd.keys():
             raise ValueError(f'{model_type} is not part of the model catalogue. Unknown model type.')
         else:
@@ -888,35 +878,35 @@ class UAM(TrainingScheme):
             y = pd.concat(y)
             y = df[['RV']].loc[y.index.unique(), :].join(y, how='inner')
             y = y.rename(columns={'RV': 'y', 0: 'y_hat'})
-        else:
-            vars_dd = dict()
-            var_obj = VAR_Model()
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = \
-                    [executor.submit(var_obj.var_train, idx, date, df, self._L, self._transformation,
-                                     self._factory_transformation_dd, **kwargs) for idx, date
-                     in enumerate(dates[start_idx:])]
-                for future in concurrent.futures.as_completed(futures):
-                    date, var = future.result()
-                    vars_dd[date] = var
-            vars_dd = pd.DataFrame(vars_dd.items()).set_index(0).sort_index().ffill()
-            vars_dd = dict(zip(vars_dd.index, vars_dd.iloc[:, 0]))
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = [executor.submit(var_obj.var_forecast, var_model, date, df, self._L, self._b) for date,
-                var_model in vars_dd.items()]
-                for future in concurrent.futures.as_completed(futures):
-                    y.append(future.result())
-            y_hat = pd.concat(y).sort_index().unstack()
-            y = \
-                self.factory_transformation_dd[transformation]['transformation'](
-                df.loc[df.index.isin(y_hat.index.get_level_values(1).unique()), :])
-            y = y.unstack()
-            y = pd.concat([y, y_hat], axis=1)
-            y = \
-                y.reset_index().rename(columns={'level_0': 'symbol',
-                                                'level_1': 'timestamp',
-                                                0: 'y',
-                                                1: 'y_hat'}).set_index(['symbol', 'timestamp'])
+        # else:
+        #     vars_dd = dict()
+        #     var_obj = VAR_Model()
+        #     with concurrent.futures.ThreadPoolExecutor() as executor:
+        #         futures = \
+        #             [executor.submit(var_obj.var_train, idx, date, df, self._L, self._transformation,
+        #                              self._factory_transformation_dd, **kwargs) for idx, date
+        #              in enumerate(dates[start_idx:])]
+        #         for future in concurrent.futures.as_completed(futures):
+        #             date, var = future.result()
+        #             vars_dd[date] = var
+        #     vars_dd = pd.DataFrame(vars_dd.items()).set_index(0).sort_index().ffill()
+        #     vars_dd = dict(zip(vars_dd.index, vars_dd.iloc[:, 0]))
+        #     with concurrent.futures.ThreadPoolExecutor() as executor:
+        #         futures = [executor.submit(var_obj.var_forecast, var_model, date, df, self._L, self._b) for date,
+        #         var_model in vars_dd.items()]
+        #         for future in concurrent.futures.as_completed(futures):
+        #             y.append(future.result())
+        #     y_hat = pd.concat(y).sort_index().unstack()
+        #     y = \
+        #         self.factory_transformation_dd[transformation]['transformation'](
+        #         df.loc[df.index.isin(y_hat.index.get_level_values(1).unique()), :])
+        #     y = y.unstack()
+        #     y = pd.concat([y, y_hat], axis=1)
+        #     y = \
+        #         y.reset_index().rename(columns={'level_0': 'symbol',
+        #                                         'level_1': 'timestamp',
+        #                                         0: 'y',
+        #                                         1: 'y_hat'}).set_index(['symbol', 'timestamp'])
         y = self.factory_transformation_dd[transformation]['inverse'](y).sort_index(axis=0, level=[0, 1])
         y = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)]).sum()
         if kwargs.get('trading_session') in [1, None]:

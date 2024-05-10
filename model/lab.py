@@ -1,5 +1,3 @@
-import concurrent.futures
-import pdb
 import typing
 from typing import Tuple
 import pandas as pd
@@ -10,13 +8,12 @@ from dateutil.relativedelta import relativedelta
 import numpy as np
 from data_centre.data import Reader, DBQuery
 import sqlite3
-import itertools
-import rpy2.robjects as ro
-from rpy2.robjects.packages import importr
-from rpy2.robjects import pandas2ri
-pandas2ri.activate()
-var = importr("vars")
-spillover = importr("Spillover")
+# import rpy2.robjects as ro
+# from rpy2.robjects.packages import importr
+# from rpy2.robjects import pandas2ri
+# pandas2ri.activate()
+# var = importr("vars")
+# spillover = importr("Spillover")
 from datetime import datetime
 import torch, torch.nn as nn, torch.optim as optim
 from torch.utils.data import DataLoader
@@ -469,102 +466,102 @@ def train_model(train: DataLoader, valid: DataLoader, EPOCH: int, model: typing.
             )
 
 
-class VAR_Model:
+# class VAR_Model:
+#
+#     def __init__(self):
+#         pass
+#
+#     @staticmethod
+#     def var_train(idx: int, date: datetime, df: pd.DataFrame, L: str, transformation: str,
+#                   factory_transformation: dict, r: bool=False, **kwargs) -> \
+#             typing.Union[typing.Tuple[datetime, ro.vectors.ListVector], typing.Tuple[datetime, None],
+#             typing.Tuple[datetime, tsa.vector_ar.var_model.VARResultsWrapper]]:
+#         var_model = None
+#         if (idx == 0) | (training_freq(date, kwargs['freq'])):
+#             print(f'[Training model]: Training on {date.strftime("%Y-%m-%d")} has started...')
+#             train = df.loc[(date - relativedelta(
+#                 days={'1W': 7, '1M': 30, '6M': 180}[L])).strftime('%Y-%m-%d'):(
+#                                    date - relativedelta(days=1)).strftime('%Y-%m-%d'), :]
+#             print(f'[Training model]: Training on {date.strftime("%Y-%m-%d")} is now complete.')
+#             if r:
+#                 pd.DataFrame.iteritems = pd.DataFrame.items
+#                 train_r = \
+#                     pandas2ri.py2rpy_pandasdataframe(factory_transformation[transformation]['transformation'](train))
+#                 var_model = var.VAR(train_r, p=1, type="const")
+#             else:
+#                 var_model = VAR(factory_transformation[transformation]['transformation'](train))
+#                 try:
+#                     var_model = var_model.fit(1)
+#                 except ValueError:
+#                     var_model = var_model.fit(1, trend='n')
+#         else:
+#             print(f'No training on {date.strftime("%Y-%m-%d")}...')
+#         return date, var_model
+#
+#     @staticmethod
+#     def var_forecast(var_model: tsa.vector_ar.var_model.VARResultsWrapper, date: datetime,
+#                      df: pd.DataFrame, L: str, freq: str, n_head: int = 288) -> pd.DataFrame:
+#         start_var_idx = (date - relativedelta(days={'1W': 7, '1M': 30, '6M': 180}[L])).strftime(
+#             '%Y-%m-%d')
+#         end_var_idx = (date - relativedelta(days=1)).strftime('%Y-%m-%d')
+#         y = \
+#             pd.DataFrame(
+#                 data=var_model.forecast(df.loc[start_var_idx:end_var_idx, :].values, n_head),
+#                 index=pd.date_range(start=date, end=date + relativedelta(days=1), freq=freq,
+#                                     tz=pytz.utc, inclusive='left'),
+#                 columns=df.columns)
+#         return y
 
-    def __init__(self):
-        pass
 
-    @staticmethod
-    def var_train(idx: int, date: datetime, df: pd.DataFrame, L: str, transformation: str,
-                  factory_transformation: dict, r: bool=False, **kwargs) -> \
-            typing.Union[typing.Tuple[datetime, ro.vectors.ListVector], typing.Tuple[datetime, None],
-            typing.Tuple[datetime, tsa.vector_ar.var_model.VARResultsWrapper]]:
-        var_model = None
-        if (idx == 0) | (training_freq(date, kwargs['freq'])):
-            print(f'[Training model]: Training on {date.strftime("%Y-%m-%d")} has started...')
-            train = df.loc[(date - relativedelta(
-                days={'1W': 7, '1M': 30, '6M': 180}[L])).strftime('%Y-%m-%d'):(
-                                   date - relativedelta(days=1)).strftime('%Y-%m-%d'), :]
-            print(f'[Training model]: Training on {date.strftime("%Y-%m-%d")} is now complete.')
-            if r:
-                pd.DataFrame.iteritems = pd.DataFrame.items
-                train_r = \
-                    pandas2ri.py2rpy_pandasdataframe(factory_transformation[transformation]['transformation'](train))
-                var_model = var.VAR(train_r, p=1, type="const")
-            else:
-                var_model = VAR(factory_transformation[transformation]['transformation'](train))
-                try:
-                    var_model = var_model.fit(1)
-                except ValueError:
-                    var_model = var_model.fit(1, trend='n')
-        else:
-            print(f'No training on {date.strftime("%Y-%m-%d")}...')
-        return date, var_model
-
-    @staticmethod
-    def var_forecast(var_model: tsa.vector_ar.var_model.VARResultsWrapper, date: datetime,
-                     df: pd.DataFrame, L: str, freq: str, n_head: int = 288) -> pd.DataFrame:
-        start_var_idx = (date - relativedelta(days={'1W': 7, '1M': 30, '6M': 180}[L])).strftime(
-            '%Y-%m-%d')
-        end_var_idx = (date - relativedelta(days=1)).strftime('%Y-%m-%d')
-        y = \
-            pd.DataFrame(
-                data=var_model.forecast(df.loc[start_var_idx:end_var_idx, :].values, n_head),
-                index=pd.date_range(start=date, end=date + relativedelta(days=1), freq=freq,
-                                    tz=pytz.utc, inclusive='left'),
-                columns=df.columns)
-        return y
-
-
-class SpilloverEffect:
-
-    def __init__(self, forecast: pd.DataFrame = None):
-        self._g_spillover = None
-        self._forecast = forecast if forecast is None else forecast.copy()
-        self._spillover_network_dd = dict()
-        self._net_transmitter_sender_dd = dict()
-        self._spillover_index_dd = dict()
-
-    @property
-    def forecast(self) -> pd.DataFrame:
-        return self._forecast
-
-    @property
-    def g_spillover(self) -> pd.DataFrame:
-        self._g_spillover = self.spillover()
-        return self._g_spillover
-
-    @property
-    def spillover_network_dd(self) -> typing.Dict:
-        return self._spillover_network_dd
-
-    @property
-    def net_transmitter_sender_dd(self) -> typing.Dict:
-        return self._net_transmitter_sender_dd
-
-    @property
-    def spillover_index_dd(self) -> typing.Dict:
-        return self._spillover_index_dd
-
-    @forecast.setter
-    def forecast(self, forecast: pd.DataFrame) -> None:
-        self._forecast = forecast
-
-    def spillover(self) -> pd.DataFrame:
-        pd.DataFrame.iteritems = pd.DataFrame.items
-        train_r = ro.pandas2ri.py2rpy_pandasdataframe(self._forecast)
-        vars_r = var.VAR(train_r, p=1, type="const")
-        n_ahead = pd.to_timedelta(self._forecast.index[1]-self._forecast.index[0])//pd.to_timedelta('5T')
-        g_spillover = spillover.G_spillover(vars_r, n_ahead=n_ahead, standardized="TRUE")
-        g_spillover = pd.DataFrame(data=g_spillover, index=self._forecast.columns.tolist() + ['To', 'Net'],
-                                   columns=self._forecast.columns.tolist() + ['From']).div(100)
-        return g_spillover
-
-    def spillover_matrix(self) -> np.ndarray:
-        return self.g_spillover.iloc[:-2, :-1]
-
-    def spillover_type(self) -> np.ndarray:
-        return self.g_spillover.iloc[-1, :-1]
-
-    def spillover_index(self) -> float:
-        return self.spillover().iloc[-2, -1]
+# class SpilloverEffect:
+#
+#     def __init__(self, forecast: pd.DataFrame = None):
+#         self._g_spillover = None
+#         self._forecast = forecast if forecast is None else forecast.copy()
+#         self._spillover_network_dd = dict()
+#         self._net_transmitter_sender_dd = dict()
+#         self._spillover_index_dd = dict()
+#
+#     @property
+#     def forecast(self) -> pd.DataFrame:
+#         return self._forecast
+#
+#     @property
+#     def g_spillover(self) -> pd.DataFrame:
+#         self._g_spillover = self.spillover()
+#         return self._g_spillover
+#
+#     @property
+#     def spillover_network_dd(self) -> typing.Dict:
+#         return self._spillover_network_dd
+#
+#     @property
+#     def net_transmitter_sender_dd(self) -> typing.Dict:
+#         return self._net_transmitter_sender_dd
+#
+#     @property
+#     def spillover_index_dd(self) -> typing.Dict:
+#         return self._spillover_index_dd
+#
+#     @forecast.setter
+#     def forecast(self, forecast: pd.DataFrame) -> None:
+#         self._forecast = forecast
+#
+#     def spillover(self) -> pd.DataFrame:
+#         pd.DataFrame.iteritems = pd.DataFrame.items
+#         train_r = ro.pandas2ri.py2rpy_pandasdataframe(self._forecast)
+#         vars_r = var.VAR(train_r, p=1, type="const")
+#         n_ahead = pd.to_timedelta(self._forecast.index[1]-self._forecast.index[0])//pd.to_timedelta('5T')
+#         g_spillover = spillover.G_spillover(vars_r, n_ahead=n_ahead, standardized="TRUE")
+#         g_spillover = pd.DataFrame(data=g_spillover, index=self._forecast.columns.tolist() + ['To', 'Net'],
+#                                    columns=self._forecast.columns.tolist() + ['From']).div(100)
+#         return g_spillover
+#
+#     def spillover_matrix(self) -> np.ndarray:
+#         return self.g_spillover.iloc[:-2, :-1]
+#
+#     def spillover_type(self) -> np.ndarray:
+#         return self.g_spillover.iloc[-1, :-1]
+#
+#     def spillover_index(self) -> float:
+#         return self.spillover().iloc[-2, -1]
