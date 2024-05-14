@@ -349,7 +349,7 @@ class TrainingScheme(object):
         tmp_dd = dict()
         kwargs_copy = kwargs.copy()
         del kwargs_copy['symbol']
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
             if (self.__class__.__name__ == 'ClustAM') | (self._model_type in ['risk_metrics']):
                 futures = \
                     [executor.submit(self.rolling_metrics_per_date, exog=exog, endog=endog, date=date,
