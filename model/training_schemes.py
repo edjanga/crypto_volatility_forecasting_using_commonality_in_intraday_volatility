@@ -19,14 +19,13 @@ from model.feature_engineering_room import FeatureAR, FeatureHAR, FeatureRiskMet
 import numpy as np
 import optuna
 from model.lab import training_freq, train_model, split_train_valid_set, lags, scaling, inverse_scaling,\
-    LSTM_NNModel, qlike_score, reshape_dataframe #VAR_Model
+    LSTM_NNModel, qlike_score, reshape_dataframe, VAR_Model
 import torch
 from torch.utils.data import DataLoader
 from optuna.samplers import RandomSampler
 from functools import partial
 import pytz
 from data_centre.data import Reader
-
 DEVICE = 'cpu'
 if torch.cuda.is_available():
     DEVICE = 'cuda'
@@ -48,21 +47,11 @@ class TrainingScheme(object):
     _db_connect_coefficient = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/'
                                                                        f'databases/coefficients.db'),
                                               check_same_thread=False)
-    _db_connect_mse = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/mse.db'),
-                                      check_same_thread=False)
     _db_connect_qlike = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases'
                                                                  f'/qlike.db'),
                                         check_same_thread=False)
-    _db_connect_r2 = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases'
-                                                              f'/r2.db'), check_same_thread=False)
     _db_connect_y = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/y.db'),
                                     check_same_thread=False)
-    _db_connect_pca = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/pca.db'),
-                                      check_same_thread=False)
-    _db_feature_importance = sqlite3.connect(
-        database=os.path.abspath(f'{_data_centre_dir}/databases/feature_importance.db'),
-        check_same_thread=False
-    )
     _factory_model_type_dd = {'ar': FeatureAR(), 'har': FeatureHAR(), 'risk_metrics': FeatureRiskMetrics(),
                               'har_eq': FeatureHAREq(), None: None}
 
@@ -192,10 +181,6 @@ class TrainingScheme(object):
                    **kwargs) -> pd.DataFrame:
         pass
 
-    def stats_condition(self, regression_type: str) -> bool:
-        return False if regression_type == 'lightgbm' else True
-
-
     @staticmethod
     def volatility_period(df: pd.DataFrame) -> pd.Series:
         rv_mkt = pd.DataFrame(df.mean(axis=1).rename('RV_MKT')).resample('1D').sum()
@@ -255,22 +240,11 @@ class TrainingScheme(object):
         if study.best_trial.number == trial.number:
             study.set_user_attr(key='best_estimator', value=trial.user_attrs['best_estimator'])
 
-    @staticmethod
-    def training_freq(date: datetime, freq: str = '6M') -> bool:
-        if freq == '1D':
-            return True
-        elif freq == '1W':
-            return date.isocalendar()[1] != (date - relativedelta(days=1)).isocalendar()[1]
-        elif freq == '1M':
-            return date.month != (date - relativedelta(days=1)).month
-        elif freq == '6M':
-            return (date == datetime(date.year, 7, 1).date()) | (date == datetime(date.year, 1, 1).date())
-
     def rolling_metrics_per_date(self, date: datetime, symbol: str, regression_type: str,
                                  exog: pd.DataFrame, endog: pd.DataFrame, transformation: str,
                                  **kwargs) -> (datetime, object):
         if (kwargs['idx'] == 0) | (training_freq(date, freq=kwargs['freq'])) | \
-                (self._model_type in ['heavy', 'risk_metrics']):
+                (self._model_type in ['risk_metrics']):
             train_index = list(set(exog.index[(exog.index.date >= date - L_train) & (exog.index.date < date)]))
             train_index.sort()
             test_index = list(set(exog.index[exog.index.date == date]))
@@ -279,7 +253,7 @@ class TrainingScheme(object):
                 valid_index = train_index[-len(train_index) // 5:]
                 train_index = train_index[:-len(train_index) // 5]
                 X_valid, y_valid = exog.loc[exog.index.isin(valid_index), :], endog.loc[endog.index.isin(valid_index)]
-            if self._model_type in ['heavy', 'risk_metrics']:
+            if self._model_type in ['risk_metrics']:
                 model_obj = self._factory_model_type_dd[self._model_type]
                 yt_hat = model_obj.predict(y=endog.loc[(date-relativedelta(
                     days={'1W': 7, '1M': 30, '6M': 180}[self._L])).strftime('%Y-%m-%d'):date.strftime('%Y-%m-%d')],
@@ -349,7 +323,7 @@ class TrainingScheme(object):
         tmp_dd = dict()
         kwargs_copy = kwargs.copy()
         del kwargs_copy['symbol']
-        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+        with concurrent.futures.ThreadPoolExecutor() as executor:
             if (self.__class__.__name__ == 'ClustAM') | (self._model_type in ['risk_metrics']):
                 futures = \
                     [executor.submit(self.rolling_metrics_per_date, exog=exog, endog=endog, date=date,
@@ -408,27 +382,15 @@ class TrainingScheme(object):
         y = TrainingScheme._factory_transformation_dd[transformation]['inverse'](y)
         y = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)]).sum()
         tmp = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=agg)])
-        mse = tmp.apply(lambda x: mean_squared_error(x.iloc[:, 0], x.iloc[:, -1]))
         qlike = tmp.apply(qlike_score)
-        mse = pd.Series(mse, name=symbol)
         qlike = pd.Series(qlike, name=symbol)
-        mse = pd.melt(pd.DataFrame(mse), ignore_index=False, value_name='values', var_name='symbol')
-        mse = mse.assign(metric='mse')
         qlike = pd.melt(pd.DataFrame(qlike), ignore_index=False, value_name='values', var_name='symbol')
         qlike = qlike.assign(metric='qlike')
         y.reset_index(level='symbol', inplace=True)
         y.index = pd.to_datetime(y.index, utc=True)
         y = y.rename(columns={symbol: 'y', 0: 'y_hat'})
-        table_dd = {'qlike': qlike, 'mse': mse, 'y': y}
-        training_scheme_tables = {'qlike': self._training_scheme_qlike_dd, 'mse': self._training_scheme_mse_dd,
-                                  'y': self._training_scheme_y_dd}
-        if regression_type in ['linear', 'lasso', 'ridge', 'elastic', 'pcr', 'ewma']:
-            r2 = tmp.apply(lambda x: r2_score(x.iloc[:, 1], x.iloc[:, -1]))
-            r2 = pd.Series(r2, name=symbol)
-            r2 = pd.melt(pd.DataFrame(r2), ignore_index=False, value_name='values', var_name='symbol')
-            r2 = r2.assign(metric='r2')
-            table_dd.update({'r2': r2})
-            training_scheme_tables.update({'r2': self._training_scheme_r2_dd})
+        table_dd = {'qlike': qlike, 'y': y}
+        training_scheme_tables = {'qlike': self._training_scheme_qlike_dd, 'y': self._training_scheme_y_dd}
         transformation_dd = {'log': 'log', None: 'level'}
         for table_name, table in table_dd.items():
             table = table.assign(symbol=symbol, model=self._model_type, L=self._L,
@@ -442,12 +404,14 @@ class TrainingScheme(object):
 
     def add_metrics_per_symbol(self, symbol: str, df: pd.DataFrame, agg: str, transformation: str,
                                regression_type: str = 'linear', **kwargs) -> None:
+        kwargs_copy = kwargs.copy()
+        del kwargs_copy['freq']
         try:
             rv_mkt = self.volatility_period(df.loc[:, ~df.columns.str.contains('VIXM')])
         except ValueError:
             rv_mkt = self.volatility_period(self._reader_obj.rv_read())
         if (self.__class__.__name__ in ['SAM', 'ClustAM']) & (self._model_type not in ['risk_metrics']):
-            exog = self.build_exog(symbol=symbol, df=df, transformation=transformation, **kwargs)
+            exog = self.build_exog(symbol=symbol, df=df, transformation=transformation, **kwargs_copy)
         else:
             exog = df.copy()
         exog = exog.replace(np.inf, np.nan)
@@ -458,15 +422,9 @@ class TrainingScheme(object):
         )
         y = self._training_scheme_y_dd[symbol]
         qlike = self._training_scheme_qlike_dd[symbol]
-        mse = self._training_scheme_mse_dd[symbol]
-        con_dd = \
-            {'qlike': TrainingScheme._db_connect_qlike, 'mse': TrainingScheme._db_connect_mse,
-             'y': TrainingScheme._db_connect_y, 'pca': TrainingScheme._db_connect_pca}
-        table_dd = {'qlike': qlike, 'mse': mse, 'y': y}
-        if regression_type in ['linear', 'lasso', 'ridge', 'pcr', 'elastic']:
-            r2 = self._training_scheme_r2_dd[symbol]
-            table_dd.update({'r2': r2})
-            con_dd.update({'r2': TrainingScheme._db_connect_r2})
+        # mse = self._training_scheme_mse_dd[symbol]
+        con_dd = {'qlike': TrainingScheme._db_connect_qlike, 'y': TrainingScheme._db_connect_y}
+        table_dd = {'qlike': qlike, 'y': y}
         count = 1
         for table_name, table in table_dd.items():
             if table_name != 'y':
@@ -500,20 +458,29 @@ class TrainingScheme(object):
 
 class SAM(TrainingScheme):
 
-    def build_exog(self, symbol: str, df: pd.DataFrame, transformation: str, **kwargs)-> pd.DataFrame:
+    def build_exog(self, symbol: str, df: pd.DataFrame, transformation: str, **kwargs) -> pd.DataFrame:
         if self._model_type not in ['risk_metrics']:
-            exog = \
-                TrainingScheme._factory_model_type_dd[self._model_type].builder(F=self._F,
-                                                                                df=df, symbol=symbol, **kwargs)
+            try:
+                exog = \
+                    TrainingScheme._factory_model_type_dd[self._model_type].builder(F=self._F,
+                                                                                    df=df, symbol=symbol, **kwargs)
+            except TypeError as e:
+                print(e)
+                pdb.set_trace()
         else:
             exog = df[[symbol]]
         return exog
 
     def add_metrics(self, df: pd.DataFrame, agg: str, transformation: str, regression_type: str = 'linear',
                     **kwargs) -> None:
-        for symbol in df.columns:
-            self.add_metrics_per_symbol(symbol=symbol, transformation=transformation, regression_type=regression_type,
-                                        df=df, agg=agg, **kwargs)
+        # for symbol in df.columns:
+        #     start_time = time.perf_counter()
+        #     self.add_metrics_per_symbol(symbol=symbol, transformation=transformation, regression_type=regression_type,
+        #                                 df=df, agg=agg, **kwargs)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(self.add_metrics_per_symbol, symbol=symbol, transformation=transformation,
+                                       regression_type=regression_type, df=df, agg=agg, **kwargs)
+                       for symbol in df.columns]
 
 
 class ClustAM(TrainingScheme):
@@ -747,10 +714,10 @@ class UAM(TrainingScheme):
             train_dataloader = \
                 DataLoader(torch.tensor(train_dataloader.values.reshape(BATCH_SIZE, TRAIN_SIZE, self._INPUT_SIZE + 1),
                                         dtype=torch.float32, device=DEVICE), batch_size=1, shuffle=True,
-                           pin_memory=True)
+                           pin_memory=False)
             valid_dataloader = \
                 DataLoader(torch.tensor(valid_dataloader.values.reshape(BATCH_SIZE, VALID_SIZE, self._INPUT_SIZE + 1),
-                                        dtype=torch.float32, device=DEVICE), shuffle=False, pin_memory=True,
+                                        dtype=torch.float32, device=DEVICE), shuffle=False, pin_memory=False,
                            batch_size=1)
             train_model(train=train_dataloader, valid=valid_dataloader, EPOCH=EPOCH, model=model,
                         early_stopping_patience=EARLY_STOPPING_PATIENCE)
