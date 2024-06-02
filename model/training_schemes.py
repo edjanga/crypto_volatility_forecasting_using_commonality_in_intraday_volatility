@@ -5,8 +5,10 @@ from typing import Tuple, Union
 import lightgbm
 import pandas as pd
 import lightgbm as lgb
-from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
-from sklearn.decomposition import PCA
+#from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
+from cuml.liner_model import LinearRegression, Ridge, Lasse, ElasticNet
+#from sklearn.decomposition import PCA
+from cuml.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import r2_score, mean_squared_error, silhouette_score
 from sklearn.cluster import KMeans
