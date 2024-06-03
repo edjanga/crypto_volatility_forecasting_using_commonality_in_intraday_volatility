@@ -6,7 +6,7 @@ import lightgbm
 import pandas as pd
 import lightgbm as lgb
 #from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
-from cuml.liner_model import LinearRegression, Ridge, Lasse, ElasticNet
+from cuml.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
 #from sklearn.decomposition import PCA
 from cuml.decomposition import PCA
 from sklearn.pipeline import Pipeline
@@ -479,7 +479,7 @@ class SAM(TrainingScheme):
         #     start_time = time.perf_counter()
         #     self.add_metrics_per_symbol(symbol=symbol, transformation=transformation, regression_type=regression_type,
         #                                 df=df, agg=agg, **kwargs)
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
             futures = [executor.submit(self.add_metrics_per_symbol, symbol=symbol, transformation=transformation,
                                        regression_type=regression_type, df=df, agg=agg, **kwargs)
                        for symbol in df.columns]
@@ -582,10 +582,15 @@ class CAM(TrainingScheme):
         if (self._model_type == 'har_eq') & (kwargs.get('trading_session') == 0):
             self._universe = self._universe+kwargs['vixm'].columns.tolist()
             df = self.build_exog(df, transformation, **kwargs)
-        for symbol in self._universe:
-            print(f'[Data Process]: Process for {symbol} has started...')
-            self.add_metrics_per_symbol(symbol=symbol, df=df, agg=agg, regression_type=regression_type,
-                                        transformation=transformation, **kwargs)
+        # for symbol in self._universe:
+        #     print(f'[Data Process]: Process for {symbol} has started...')
+        #     self.add_metrics_per_symbol(symbol=symbol, df=df, agg=agg, regression_type=regression_type,
+        #                                 transformation=transformation, **kwargs)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
+            futures = [executor.submit(self.add_metrics_per_symbol, symbol=symbol, transformation=transformation,
+                                       regression_type=regression_type, df=df, agg=agg, **kwargs)
+                       for symbol in df.columns]
+
 
     @property
     def feature_importance(self):
