@@ -2,8 +2,10 @@ import pdb
 import typing
 from typing import Tuple
 import pandas as pd
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score
+# from sklearn.linear_model import LinearRegression
+# from sklearn.metrics import r2_score
+from cuml.linear_model import LinearRegression
+from cuml.metrics.regression import r2_score
 import os
 from dateutil.relativedelta import relativedelta
 import numpy as np
@@ -12,9 +14,6 @@ import sqlite3
 import rpy2.robjects as ro
 from rpy2.robjects.packages import importr
 from rpy2.robjects import pandas2ri
-pandas2ri.activate()
-var = importr("vars")
-spillover = importr("Spillover")
 from datetime import datetime
 import torch, torch.nn as nn, torch.optim as optim
 from torch.utils.data import DataLoader
@@ -23,6 +22,9 @@ from statsmodels.tsa.api import VAR
 from statsmodels import tsa
 import pytz
 import plotly.io as pio
+pandas2ri.activate()
+var = importr("vars")
+spillover = importr("Spillover")
 pio.kaleido.scope.mathjax = None
 
 DEVICE = 'cpu'
@@ -469,51 +471,51 @@ def train_model(train: DataLoader, valid: DataLoader, EPOCH: int, model: typing.
             )
 
 
-# class VAR_Model:
-#
-#     def __init__(self):
-#         pass
-#
-#     @staticmethod
-#     def var_train(idx: int, date: datetime, df: pd.DataFrame, L: str, transformation: str,
-#                   factory_transformation: dict, r: bool=False, **kwargs) -> \
-#             typing.Union[typing.Tuple[datetime, ro.vectors.ListVector], typing.Tuple[datetime, None],
-#             typing.Tuple[datetime, tsa.vector_ar.var_model.VARResultsWrapper]]:
-#         var_model = None
-#         if (idx == 0) | (training_freq(date, kwargs['freq'])):
-#             print(f'[Training model]: Training on {date.strftime("%Y-%m-%d")} has started...')
-#             train = df.loc[(date - relativedelta(
-#                 days={'1W': 7, '1M': 30, '6M': 180}[L])).strftime('%Y-%m-%d'):(
-#                                    date - relativedelta(days=1)).strftime('%Y-%m-%d'), :]
-#             print(f'[Training model]: Training on {date.strftime("%Y-%m-%d")} is now complete.')
-#             if r:
-#                 pd.DataFrame.iteritems = pd.DataFrame.items
-#                 train_r = \
-#                     pandas2ri.py2rpy_pandasdataframe(factory_transformation[transformation]['transformation'](train))
-#                 var_model = var.VAR(train_r, p=1, type="const")
-#             else:
-#                 var_model = VAR(factory_transformation[transformation]['transformation'](train))
-#                 try:
-#                     var_model = var_model.fit(1)
-#                 except ValueError:
-#                     var_model = var_model.fit(1, trend='n')
-#         else:
-#             print(f'No training on {date.strftime("%Y-%m-%d")}...')
-#         return date, var_model
-#
-#     @staticmethod
-#     def var_forecast(var_model: tsa.vector_ar.var_model.VARResultsWrapper, date: datetime,
-#                      df: pd.DataFrame, L: str, freq: str, n_head: int = 288) -> pd.DataFrame:
-#         start_var_idx = (date - relativedelta(days={'1W': 7, '1M': 30, '6M': 180}[L])).strftime(
-#             '%Y-%m-%d')
-#         end_var_idx = (date - relativedelta(days=1)).strftime('%Y-%m-%d')
-#         y = \
-#             pd.DataFrame(
-#                 data=var_model.forecast(df.loc[start_var_idx:end_var_idx, :].values, n_head),
-#                 index=pd.date_range(start=date, end=date + relativedelta(days=1), freq=freq,
-#                                     tz=pytz.utc, inclusive='left'),
-#                 columns=df.columns)
-#         return y
+class VAR_Model:
+
+    def __init__(self):
+        pass
+
+    @staticmethod
+    def var_train(idx: int, date: datetime, df: pd.DataFrame, L: str, transformation: str,
+                  factory_transformation: dict, r: bool=False, **kwargs) -> \
+            typing.Union[typing.Tuple[datetime, ro.vectors.ListVector], typing.Tuple[datetime, None],
+            typing.Tuple[datetime, tsa.vector_ar.var_model.VARResultsWrapper]]:
+        var_model = None
+        if (idx == 0) | (training_freq(date, kwargs['freq'])):
+            print(f'[Training model]: Training on {date.strftime("%Y-%m-%d")} has started...')
+            train = df.loc[(date - relativedelta(
+                days={'1W': 7, '1M': 30, '6M': 180}[L])).strftime('%Y-%m-%d'):(
+                                   date - relativedelta(days=1)).strftime('%Y-%m-%d'), :]
+            print(f'[Training model]: Training on {date.strftime("%Y-%m-%d")} is now complete.')
+            if r:
+                pd.DataFrame.iteritems = pd.DataFrame.items
+                train_r = \
+                    pandas2ri.py2rpy_pandasdataframe(factory_transformation[transformation]['transformation'](train))
+                var_model = var.VAR(train_r, p=1, type="const")
+            else:
+                var_model = VAR(factory_transformation[transformation]['transformation'](train))
+                try:
+                    var_model = var_model.fit(1)
+                except ValueError:
+                    var_model = var_model.fit(1, trend='n')
+        else:
+            print(f'No training on {date.strftime("%Y-%m-%d")}...')
+        return date, var_model
+
+    @staticmethod
+    def var_forecast(var_model: tsa.vector_ar.var_model.VARResultsWrapper, date: datetime,
+                     df: pd.DataFrame, L: str, freq: str, n_head: int = 288) -> pd.DataFrame:
+        start_var_idx = (date - relativedelta(days={'1W': 7, '1M': 30, '6M': 180}[L])).strftime(
+            '%Y-%m-%d')
+        end_var_idx = (date - relativedelta(days=1)).strftime('%Y-%m-%d')
+        y = \
+            pd.DataFrame(
+                data=var_model.forecast(df.loc[start_var_idx:end_var_idx, :].values, n_head),
+                index=pd.date_range(start=date, end=date + relativedelta(days=1), freq=freq,
+                                    tz=pytz.utc, inclusive='left'),
+                columns=df.columns)
+        return y
 
 
 class SpilloverEffect:

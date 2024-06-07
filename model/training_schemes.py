@@ -10,7 +10,9 @@ from cuml.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
 #from sklearn.decomposition import PCA
 from cuml.decomposition import PCA
 from sklearn.pipeline import Pipeline
-from sklearn.metrics import r2_score, mean_squared_error, silhouette_score
+#from sklearn.metrics import r2_score, mean_squared_error, silhouette_score
+from cuml.metrics.regression import r2_score, mean_squared_error
+from sklearn.metrics import silhouette_score
 from sklearn.cluster import KMeans
 from datetime import datetime
 import os
@@ -546,10 +548,17 @@ class ClustAM(TrainingScheme):
                                                                                  **kwargs)
         if ClustAM._cluster_group is None:
             ClustAM.build_clusters(df.loc[:, self._universe])
-        for symbol in self._universe:
-            _, member_ls = self.cluster_members(symbol)
-            self.add_metrics_per_symbol(symbol=symbol, df=df[member_ls], agg=agg, regression_type=regression_type,
-                                        transformation=transformation, cluster=member_ls, **kwargs)
+        # for symbol in self._universe:
+        #     _, member_ls = self.cluster_members(symbol)
+        #     self.add_metrics_per_symbol(symbol=symbol, df=df[member_ls], agg=agg, regression_type=regression_type,
+        #                                 transformation=transformation, cluster=member_ls, **kwargs)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
+            futures = [executor.submit(lambda x: (self.cluster_members(symbol), symbol)) for symbol in df.columns]
+            for future in concurrent.futures.as_completed(futures):
+                member, symbol = future.result()
+                member_ls = member[1]
+                self.add_metrics_per_symbol(symbol=symbol, df=df[member_ls], agg=agg, regression_type=regression_type,
+                                            transformation=transformation, cluster=member_ls, **kwargs)
 
     @property
     def clusters_trained(self):
@@ -590,7 +599,6 @@ class CAM(TrainingScheme):
             futures = [executor.submit(self.add_metrics_per_symbol, symbol=symbol, transformation=transformation,
                                        regression_type=regression_type, df=df, agg=agg, **kwargs)
                        for symbol in df.columns]
-
 
     @property
     def feature_importance(self):
