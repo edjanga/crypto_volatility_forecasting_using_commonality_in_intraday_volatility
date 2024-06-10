@@ -5,13 +5,13 @@ from typing import Tuple, Union
 import lightgbm
 import pandas as pd
 import lightgbm as lgb
-#from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
-from cuml.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
-#from sklearn.decomposition import PCA
-from cuml.decomposition import PCA
+from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
+#from cuml.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
+from sklearn.decomposition import PCA
+#from cuml.decomposition import PCA
 from sklearn.pipeline import Pipeline
-#from sklearn.metrics import r2_score, mean_squared_error, silhouette_score
-from cuml.metrics.regression import r2_score, mean_squared_error
+from sklearn.metrics import r2_score, mean_squared_error, silhouette_score
+#from cuml.metrics.regression import r2_score, mean_squared_error
 from sklearn.metrics import silhouette_score
 from sklearn.cluster import KMeans
 from datetime import datetime
@@ -666,6 +666,7 @@ class UAM(TrainingScheme):
                 'extra_tree': True,
                 'boosting_type': 'goss',
                 'lr': trial.suggest_categorical(name='lr', choices=[.01, .05, .1]),
+                'device': {False: 'cpu', True: 'gpu'}[DEVICE == 'cuda']
             }
             model = \
                 lgb.train(param, train_set=train_loader, valid_sets=[valid_loader], num_boost_round=NUM_BOOST_ROUND,
