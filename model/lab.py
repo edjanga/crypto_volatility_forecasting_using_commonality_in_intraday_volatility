@@ -2,19 +2,23 @@ import pdb
 import typing
 from typing import Tuple
 import pandas as pd
-#from sklearn.linear_model import LinearRegression
-#from sklearn.metrics import r2_score
-from cuml.linear_model import LinearRegression
-from cuml.metrics.regression import r2_score
+DEVICE = 'cpu'
+if torch.cuda.is_available():
+    DEVICE = 'cuda'
+    from cuml.metrics.regression import r2_score
+    from cuml.linear_model import LinearRegression
+else:
+    from sklearn.linear_model import LinearRegression
+    from sklearn.metrics import r2_score
 import os
 from dateutil.relativedelta import relativedelta
 import numpy as np
 from data_centre.data import Reader, DBQuery
 import sqlite3
-import rpy2.robjects as ro
-from rpy2.robjects.packages import importr
-from rpy2.robjects import pandas2ri
-from datetime import datetime
+#import rpy2.robjects as ro
+#from rpy2.robjects.packages import importr
+#from rpy2.robjects import pandas2ri
+#from datetime import datetime
 import torch, torch.nn as nn, torch.optim as optim
 from torch.utils.data import DataLoader
 import plotly.express as px
@@ -22,14 +26,10 @@ from statsmodels.tsa.api import VAR
 from statsmodels import tsa
 import pytz
 import plotly.io as pio
-pandas2ri.activate()
-var = importr("vars")
-spillover = importr("Spillover")
+#pandas2ri.activate()
+#var = importr("vars")
+#spillover = importr("Spillover")
 pio.kaleido.scope.mathjax = None
-
-DEVICE = 'cpu'
-if torch.cuda.is_available():
-    DEVICE = 'cuda'
 
 _data_centre_dir = os.path.abspath(__file__).replace('/model/lab.py', '/data_centre/databases')
 L_dd = {'1W': '7D', '1M': '30D', '6M': '180D'}
@@ -519,54 +519,54 @@ def train_model(train: DataLoader, valid: DataLoader, EPOCH: int, model: typing.
 #
 #
 # class SpilloverEffect:
-
-    def __init__(self, forecast: pd.DataFrame = None):
-        self._g_spillover = None
-        self._forecast = forecast if forecast is None else forecast.copy()
-        self._spillover_network_dd = dict()
-        self._net_transmitter_sender_dd = dict()
-        self._spillover_index_dd = dict()
-
-    @property
-    def forecast(self) -> pd.DataFrame:
-        return self._forecast
-
-    @property
-    def g_spillover(self) -> pd.DataFrame:
-        self._g_spillover = self.spillover()
-        return self._g_spillover
-
-    @property
-    def spillover_network_dd(self) -> typing.Dict:
-        return self._spillover_network_dd
-
-    @property
-    def net_transmitter_sender_dd(self) -> typing.Dict:
-        return self._net_transmitter_sender_dd
-
-    @property
-    def spillover_index_dd(self) -> typing.Dict:
-        return self._spillover_index_dd
-
-    @forecast.setter
-    def forecast(self, forecast: pd.DataFrame) -> None:
-        self._forecast = forecast
-
-    def spillover(self) -> pd.DataFrame:
-        pd.DataFrame.iteritems = pd.DataFrame.items
-        train_r = ro.pandas2ri.py2rpy_pandasdataframe(self._forecast)
-        vars_r = var.VAR(train_r, p=1, type="const")
-        n_ahead = pd.to_timedelta(self._forecast.index[1]-self._forecast.index[0])//pd.to_timedelta('5T')
-        g_spillover = spillover.G_spillover(vars_r, n_ahead=n_ahead, standardized="TRUE")
-        g_spillover = pd.DataFrame(data=g_spillover, index=self._forecast.columns.tolist() + ['To', 'Net'],
-                                   columns=self._forecast.columns.tolist() + ['From']).div(100)
-        return g_spillover
-
-    def spillover_matrix(self) -> np.ndarray:
-        return self.g_spillover.iloc[:-2, :-1]
-
-    def spillover_type(self) -> np.ndarray:
-        return self.g_spillover.iloc[-1, :-1]
-
-    def spillover_index(self) -> float:
-        return self.spillover().iloc[-2, -1]
+#
+#     def __init__(self, forecast: pd.DataFrame = None):
+#         self._g_spillover = None
+#         self._forecast = forecast if forecast is None else forecast.copy()
+#         self._spillover_network_dd = dict()
+#         self._net_transmitter_sender_dd = dict()
+#         self._spillover_index_dd = dict()
+#
+#     @property
+#     def forecast(self) -> pd.DataFrame:
+#         return self._forecast
+#
+#     @property
+#     def g_spillover(self) -> pd.DataFrame:
+#         self._g_spillover = self.spillover()
+#         return self._g_spillover
+#
+#     @property
+#     def spillover_network_dd(self) -> typing.Dict:
+#         return self._spillover_network_dd
+#
+#     @property
+#     def net_transmitter_sender_dd(self) -> typing.Dict:
+#         return self._net_transmitter_sender_dd
+#
+#     @property
+#     def spillover_index_dd(self) -> typing.Dict:
+#         return self._spillover_index_dd
+#
+#     @forecast.setter
+#     def forecast(self, forecast: pd.DataFrame) -> None:
+#         self._forecast = forecast
+#
+#     def spillover(self) -> pd.DataFrame:
+#         pd.DataFrame.iteritems = pd.DataFrame.items
+#         train_r = ro.pandas2ri.py2rpy_pandasdataframe(self._forecast)
+#         vars_r = var.VAR(train_r, p=1, type="const")
+#         n_ahead = pd.to_timedelta(self._forecast.index[1]-self._forecast.index[0])//pd.to_timedelta('5T')
+#         g_spillover = spillover.G_spillover(vars_r, n_ahead=n_ahead, standardized="TRUE")
+#         g_spillover = pd.DataFrame(data=g_spillover, index=self._forecast.columns.tolist() + ['To', 'Net'],
+#                                    columns=self._forecast.columns.tolist() + ['From']).div(100)
+#         return g_spillover
+#
+#     def spillover_matrix(self) -> np.ndarray:
+#         return self.g_spillover.iloc[:-2, :-1]
+#
+#     def spillover_type(self) -> np.ndarray:
+#         return self.g_spillover.iloc[-1, :-1]
+#
+#     def spillover_index(self) -> float:
+#         return self.spillover().iloc[-2, -1]

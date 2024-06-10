@@ -5,15 +5,6 @@ from typing import Tuple, Union
 import lightgbm
 import pandas as pd
 import lightgbm as lgb
-from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
-#from cuml.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
-from sklearn.decomposition import PCA
-#from cuml.decomposition import PCA
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import r2_score, mean_squared_error, silhouette_score
-#from cuml.metrics.regression import r2_score, mean_squared_error
-from sklearn.metrics import silhouette_score
-from sklearn.cluster import KMeans
 from datetime import datetime
 import os
 from dateutil.relativedelta import relativedelta
@@ -26,6 +17,20 @@ from model.lab import training_freq, train_model, split_train_valid_set, lags, s
     LSTM_NNModel, qlike_score, reshape_dataframe#, VAR_Model
 import torch
 from torch.utils.data import DataLoader
+DEVICE = 'cpu'
+if torch.cuda.is_available():
+    DEVICE = 'cuda'
+    from cuml.metrics.regression import r2_score, mean_squared_error
+    from cuml.decomposition import PCA
+    from cuml.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
+    from cuml import KMeans
+else:
+    from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
+    from sklearn.decomposition import PCA
+    from sklearn.metrics import r2_score, mean_squared_error
+    from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+from sklearn.pipeline import Pipeline
 from optuna.samplers import RandomSampler
 from functools import partial
 import pytz
