@@ -3,6 +3,8 @@ import typing
 from typing import Tuple
 import pandas as pd
 DEVICE = 'cpu'
+import torch, torch.nn as nn, torch.optim as optim
+from torch.utils.data import DataLoader
 if torch.cuda.is_available():
     DEVICE = 'cuda'
     from cuml.metrics.regression import r2_score
@@ -19,8 +21,6 @@ import sqlite3
 #from rpy2.robjects.packages import importr
 #from rpy2.robjects import pandas2ri
 #from datetime import datetime
-import torch, torch.nn as nn, torch.optim as optim
-from torch.utils.data import DataLoader
 import plotly.express as px
 from statsmodels.tsa.api import VAR
 from statsmodels import tsa
