@@ -211,7 +211,8 @@ class TrainingScheme(object):
                 'lr': trial.suggest_categorical(name='lr', choices=[.01, .05, .1]),
                 'tree_learner': 'data',
                 'feature_fraction': trial.suggest_float('feature_fraction', .1, .8, step=.1, log=False),
-                'extra_tree': True, 'boosting_type': 'goss'
+                'extra_tree': True, 'boosting_type': 'goss',
+                'device': {False: 'cpu', True: 'gpu'}[DEVICE == 'cuda']
             }
             tmp_rres = lgb.train(param, train_set=train_loader, valid_sets=[valid_loader],
                                  num_boost_round=NUM_BOOST_ROUND,
