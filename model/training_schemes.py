@@ -20,24 +20,20 @@ from torch.utils.data import DataLoader
 DEVICE = 'cpu'
 if torch.cuda.is_available():
     DEVICE = 'cuda'
-    from cuml.metrics.regression import r2_score, mean_squared_error
-    from cuml.decomposition import PCA
-    from cuml.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
-    from cuml import KMeans
-else:
-    from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
-    from sklearn.decomposition import PCA
-    from sklearn.metrics import r2_score, mean_squared_error
-    from sklearn.cluster import KMeans
+    # from cuml.metrics.regression import r2_score, mean_squared_error
+    # from cuml.decomposition import PCA
+    # from cuml.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
+    # from cuml import KMeans
+from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
+from sklearn.decomposition import PCA
+from sklearn.metrics import r2_score, mean_squared_error
+from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.pipeline import Pipeline
 from optuna.samplers import RandomSampler
 from functools import partial
 import pytz
 from data_centre.data import Reader
-DEVICE = 'cpu'
-if torch.cuda.is_available():
-    DEVICE = 'cuda'
 """
     List of constant variables used in the script
 """
@@ -829,14 +825,14 @@ class UAM(TrainingScheme):
                     df.loc[:, df.columns.str.contains('RV')])
             df = pd.concat([df, one_hot_encoding], axis=1)
             model_s = pd.Series(data=np.nan, index=dates[start_idx:])
-            with concurrent.futures.ThreadPoolExecutor() as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
                 futures = [executor.submit(self.add_metrics_freq, transformation, df, date, idx, **kwargs) for idx, date
                            in enumerate(dates[start_idx:])]
                 for future in concurrent.futures.as_completed(futures):
                     date, model = future.result()
                     model_s[date] = model
             model_s = model_s.ffill().dropna()
-            with concurrent.futures.ThreadPoolExecutor() as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
                 if self._regression_type != 'lightgbm':
                     futures = [executor.submit(lambda x, df, model: reshape_dataframe(x, df, model), x=date, df=df,
                                                model=model_s[date]) for date in model_s.index]

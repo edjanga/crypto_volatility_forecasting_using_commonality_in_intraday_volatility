@@ -7,11 +7,11 @@ import torch, torch.nn as nn, torch.optim as optim
 from torch.utils.data import DataLoader
 if torch.cuda.is_available():
     DEVICE = 'cuda'
-    from cuml.metrics.regression import r2_score
-    from cuml.linear_model import LinearRegression
-else:
-    from sklearn.linear_model import LinearRegression
-    from sklearn.metrics import r2_score
+#     from cuml.metrics.regression import r2_score
+#     from cuml.linear_model import LinearRegression
+# else:
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
 import os
 from dateutil.relativedelta import relativedelta
 import numpy as np
