@@ -19,3 +19,4 @@ code_to_be_further_investigated.py
 executables/main_UAM.sh
 .env
 ./data_centre/*.zip
+results/
