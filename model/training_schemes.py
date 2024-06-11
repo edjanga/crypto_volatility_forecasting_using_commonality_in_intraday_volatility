@@ -14,16 +14,9 @@ from model.feature_engineering_room import FeatureAR, FeatureHAR, FeatureRiskMet
 import numpy as np
 import optuna
 from model.lab import training_freq, train_model, split_train_valid_set, lags, scaling, inverse_scaling,\
-    LSTM_NNModel, qlike_score, reshape_dataframe#, VAR_Model
+    LSTM_NNModel, qlike_score, reshape_dataframe, VAR_Model
 import torch
 from torch.utils.data import DataLoader
-DEVICE = 'cpu'
-if torch.cuda.is_available():
-    DEVICE = 'cuda'
-    # from cuml.metrics.regression import r2_score, mean_squared_error
-    # from cuml.decomposition import PCA
-    # from cuml.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
-    # from cuml import KMeans
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
 from sklearn.decomposition import PCA
 from sklearn.metrics import r2_score, mean_squared_error
@@ -34,6 +27,11 @@ from optuna.samplers import RandomSampler
 from functools import partial
 import pytz
 from data_centre.data import Reader
+DEVICE = 'cpu'
+if torch.cuda.is_available():
+    DEVICE = 'cuda'
+elif torch.backends.mps.is_available():
+    DEVICE = 'mps'
 """
     List of constant variables used in the script
 """
@@ -329,57 +327,89 @@ class TrainingScheme(object):
         tmp_dd = dict()
         kwargs_copy = kwargs.copy()
         del kwargs_copy['symbol']
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            if (self.__class__.__name__ == 'ClustAM') | (self._model_type in ['risk_metrics']):
-                futures = \
-                    [executor.submit(self.rolling_metrics_per_date, exog=exog, endog=endog, date=date,
-                                     regression_type=regression_type, transformation=transformation,
-                                     symbol=symbol, idx=idx, **kwargs_copy) for idx, date in
-                     enumerate(dates[dates.index(start):])]
+        for idx, date in enumerate(dates[dates.index(start):]):
+            if self._model_type == 'risk_metrics':
+                yt = self.rolling_metrics_per_date(exog=exog, endog=endog, date=date, regression_type=regression_type,
+                                                   transformation=transformation, symbol=symbol,
+                                                   idx=idx, **kwargs_copy)
+                y.append(yt)
             else:
-                futures = \
-                    [executor.submit(self.rolling_metrics_per_date, exog=exog, endog=endog, date=date,
-                                     regression_type=regression_type, transformation=transformation, symbol=symbol,
-                                     idx=idx, **kwargs_copy) for idx, date in
-                     enumerate(dates[dates.index(start):])]
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    date, model = future.result()
-                except ValueError:
-                    yt = future.result()
-                    y.append(yt)
-                else:
-                    tmp_dd[date] = model
-            if self._model_type not in ['risk_metrics']:
+                date, model = self.rolling_metrics_per_date(exog=exog, endog=endog, date=date,
+                                                            regression_type=regression_type,
+                                                            transformation=transformation, symbol=symbol,
+                                                            idx=idx, **kwargs_copy)
+                tmp_dd[date] = model
                 model_s = pd.Series(tmp_dd).sort_index().ffill()
                 if (self.__class__.__name__ == 'ClustAM') & (regression_type == 'pcr'):
-                    futures_pca = \
-                        [executor.submit(lambda x: (x, model_s[x][0].transform(exog.loc[exog.index.date == x, :])),
-                                         x=date) for date in model_s.index]
                     data_ls = list()
-                    for future in concurrent.futures.as_completed(futures_pca):
-                        date, principal_components = future.result()
+                    for date in model_s.index:
+                        principal_components = model_s[date][0].transform(exog.loc[exog.index.date == date, :])
                         principal_components = pd.DataFrame(data=principal_components,
-                                                            columns=[f'PCA_{idx+1}' for idx in
+                                                            columns=[f'PCA_{idx + 1}' for idx in
                                                                      range(0, principal_components.shape[1])],
                                                             index=pd.date_range(start=date,
-                                                                                end=date+relativedelta(days=1),
+                                                                                end=date + relativedelta(days=1),
                                                                                 freq='5T', tz=pytz.utc,
                                                                                 inclusive='left'))
                         data = principal_components.join(exog.filter(regex=f'{symbol}_'), how='left')
                         data_ls.append(data)
                     data = pd.concat(data_ls)
-                    futures = [executor.submit(lambda x:
-                                               (x, model_s[x][1].predict(data.loc[data.index.date == x,
-                                               model_s[x][1].feature_names_in_])), x=date) for date in model_s.index]
                 else:
-                    futures = [executor.submit(lambda x: (x, model_s[x].predict(exog.loc[exog.index.date == x, :])),
-                                               x=date) for date in model_s.index]
-                for future in concurrent.futures.as_completed(futures):
-                    date, y_hat = future.result()
+                    y_hat = model_s[date].predict(exog.loc[exog.index.date == date, :])
                     y.append(pd.Series(name=symbol, data=y_hat,
-                                       index=pd.date_range(start=date, end=date+relativedelta(days=1), freq='5T',
+                                       index=pd.date_range(start=date, end=date + relativedelta(days=1), freq='5T',
                                                            inclusive='left')))
+        # with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+        #     if (self.__class__.__name__ == 'ClustAM') | (self._model_type in ['risk_metrics']):
+        #         futures = \
+        #             [executor.submit(self.rolling_metrics_per_date, exog=exog, endog=endog, date=date,
+        #                              regression_type=regression_type, transformation=transformation,
+        #                              symbol=symbol, idx=idx, **kwargs_copy) for idx, date in
+        #              enumerate(dates[dates.index(start):])]
+        #     else:
+        #         futures = \
+        #             [executor.submit(self.rolling_metrics_per_date, exog=exog, endog=endog, date=date,
+        #                              regression_type=regression_type, transformation=transformation, symbol=symbol,
+        #                              idx=idx, **kwargs_copy) for idx, date in
+        #              enumerate(dates[dates.index(start):])]
+        #     for future in concurrent.futures.as_completed(futures):
+        #         try:
+        #             date, model = future.result()
+        #         except ValueError:
+        #             yt = future.result()
+        #             y.append(yt)
+        #         else:
+        #             tmp_dd[date] = model
+        #     if self._model_type not in ['risk_metrics']:
+        #         model_s = pd.Series(tmp_dd).sort_index().ffill()
+        #         if (self.__class__.__name__ == 'ClustAM') & (regression_type == 'pcr'):
+        #             futures_pca = \
+        #                 [executor.submit(lambda x: (x, model_s[x][0].transform(exog.loc[exog.index.date == x, :])),
+        #                                  x=date) for date in model_s.index]
+        #             data_ls = list()
+        #             for future in concurrent.futures.as_completed(futures_pca):
+        #                 date, principal_components = future.result()
+        #                 principal_components = pd.DataFrame(data=principal_components,
+        #                                                     columns=[f'PCA_{idx+1}' for idx in
+        #                                                              range(0, principal_components.shape[1])],
+        #                                                     index=pd.date_range(start=date,
+        #                                                                         end=date+relativedelta(days=1),
+        #                                                                         freq='5T', tz=pytz.utc,
+        #                                                                         inclusive='left'))
+        #                 data = principal_components.join(exog.filter(regex=f'{symbol}_'), how='left')
+        #                 data_ls.append(data)
+        #             data = pd.concat(data_ls)
+        #             futures = [executor.submit(lambda x:
+        #                                        (x, model_s[x][1].predict(data.loc[data.index.date == x,
+        #                                        model_s[x][1].feature_names_in_])), x=date) for date in model_s.index]
+        #         else:
+        #             futures = [executor.submit(lambda x: (x, model_s[x].predict(exog.loc[exog.index.date == x, :])),
+        #                                        x=date) for date in model_s.index]
+        #         for future in concurrent.futures.as_completed(futures):
+        #             date, y_hat = future.result()
+        #             y.append(pd.Series(name=symbol, data=y_hat,
+        #                                index=pd.date_range(start=date, end=date+relativedelta(days=1), freq='5T',
+        #                                                    inclusive='left')))
         y = pd.DataFrame(pd.concat(y)).dropna()
         y.index.name = 'timestamp'
         y.index = pd.to_datetime(y.index, utc=True)
@@ -398,15 +428,28 @@ class TrainingScheme(object):
         table_dd = {'qlike': qlike, 'y': y}
         training_scheme_tables = {'qlike': self._training_scheme_qlike_dd, 'y': self._training_scheme_y_dd}
         transformation_dd = {'log': 'log', None: 'level'}
-        for table_name, table in table_dd.items():
-            table = table.assign(symbol=symbol, model=self._model_type, L=self._L,
-                                 training_scheme=self.__class__.__name__, regression=regression_type,
-                                 transformation=transformation_dd[transformation],
-                                 trading_session=kwargs.get('trading_session'), top_book=kwargs.get('top_book'),
-                                 h=self._h)
-            if table_name == 'feature_importance':
-                table = table.drop('regression', axis=1)
-            training_scheme_tables[table_name][symbol] = table
+        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+            futures = \
+                [executor.submit(lambda x, y: (x, y), x=table_name, y=table) for table_name, table in table_dd.items()]
+            for future in concurrent.futures.as_completed(futures):
+                table_name, table = future.result()
+                table = table.assign(symbol=symbol, model=self._model_type, L=self._L,
+                                     training_scheme=self.__class__.__name__, regression=regression_type,
+                                     transformation=transformation_dd[transformation],
+                                     trading_session=kwargs.get('trading_session'), top_book=kwargs.get('top_book'),
+                                     h=self._h)
+                if table_name == 'feature_importance':
+                    table = table.drop('regression', axis=1)
+                training_scheme_tables[table_name][symbol] = table
+        # for table_name, table in table_dd.items():
+        #     table = table.assign(symbol=symbol, model=self._model_type, L=self._L,
+        #                          training_scheme=self.__class__.__name__, regression=regression_type,
+        #                          transformation=transformation_dd[transformation],
+        #                          trading_session=kwargs.get('trading_session'), top_book=kwargs.get('top_book'),
+        #                          h=self._h)
+        #     if table_name == 'feature_importance':
+        #         table = table.drop('regression', axis=1)
+        #     training_scheme_tables[table_name][symbol] = table
 
     def add_metrics_per_symbol(self, symbol: str, df: pd.DataFrame, agg: str, transformation: str,
                                regression_type: str = 'linear', **kwargs) -> None:
@@ -428,30 +471,52 @@ class TrainingScheme(object):
         )
         y = self._training_scheme_y_dd[symbol]
         qlike = self._training_scheme_qlike_dd[symbol]
-        # mse = self._training_scheme_mse_dd[symbol]
         con_dd = {'qlike': TrainingScheme._db_connect_qlike, 'y': TrainingScheme._db_connect_y}
         table_dd = {'qlike': qlike, 'y': y}
-        count = 1
-        for table_name, table in table_dd.items():
-            if table_name != 'y':
-                table = table.drop('symbol', axis=1)
-                table = table.reset_index(level=0)
-            if table_name != 'feature_importance':
-                table = table.join(rv_mkt.reindex(table.index).ffill(), how='left')
-            table.to_sql(if_exists='append', con=con_dd[table_name], name=f'{table_name}_{self._L}') if \
-            table_name != 'feature_importance' else table.to_sql(if_exists='append', con=con_dd[table_name],
-                                                                 name=f'{table_name}')
-            if table_name != 'feature_importance':
-                print(f'[Insertion]: '
-                      f'Tables for '
-                      f'{self.__class__.__name__}_{self._L}_{transformation_dd[transformation]}_{regression_type}_'
-                      f'{self._model_type}_{symbol}'
-                      f' have been inserted into the database ({count})....')
-            else:
-                print(f'[Insertion]: '
-                      f'Table for {self.__class__.__name__}_{self._L}_{self._model_type}_{symbol}'
-                      f' has been inserted into the database ({count})....')
-            count += 1
+        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+            futures = \
+                [executor.submit(lambda x, y: (x, y), x=table_name, y=table) for table_name, table in table_dd.items()]
+            for count, future in enumerate(concurrent.futures.as_completed(futures)):
+                table_name, table = future.result()
+                if table_name != 'y':
+                    table = table.drop('symbol', axis=1)
+                    table = table.reset_index(level=0)
+                if table_name != 'feature_importance':
+                    table = table.join(rv_mkt.reindex(table.index).ffill(), how='left')
+                table.to_sql(if_exists='append', con=con_dd[table_name], name=f'{table_name}_{self._L}') if \
+                    table_name != 'feature_importance' else table.to_sql(if_exists='append', con=con_dd[table_name],
+                                                                         name=f'{table_name}')
+                if table_name != 'feature_importance':
+                    print(f'[Insertion]: '
+                          f'Tables for '
+                          f'{self.__class__.__name__}_{self._L}_{transformation_dd[transformation]}_{regression_type}_'
+                          f'{self._model_type}_{symbol}'
+                          f' have been inserted into the database ({count+1})....')
+                else:
+                    print(f'[Insertion]: '
+                          f'Table for {self.__class__.__name__}_{self._L}_{self._model_type}_{symbol}'
+                          f' has been inserted into the database ({count+1})....')
+        # count = 1
+        # for table_name, table in table_dd.items():
+        #     if table_name != 'y':
+        #         table = table.drop('symbol', axis=1)
+        #         table = table.reset_index(level=0)
+        #     if table_name != 'feature_importance':
+        #         table = table.join(rv_mkt.reindex(table.index).ffill(), how='left')
+        #     table.to_sql(if_exists='append', con=con_dd[table_name], name=f'{table_name}_{self._L}') if \
+        #     table_name != 'feature_importance' else table.to_sql(if_exists='append', con=con_dd[table_name],
+        #                                                          name=f'{table_name}')
+        #     if table_name != 'feature_importance':
+        #         print(f'[Insertion]: '
+        #               f'Tables for '
+        #               f'{self.__class__.__name__}_{self._L}_{transformation_dd[transformation]}_{regression_type}_'
+        #               f'{self._model_type}_{symbol}'
+        #               f' have been inserted into the database ({count})....')
+        #     else:
+        #         print(f'[Insertion]: '
+        #               f'Table for {self.__class__.__name__}_{self._L}_{self._model_type}_{symbol}'
+        #               f' has been inserted into the database ({count})....')
+        #     count += 1
 
     def add_metrics(self, regression_type: str, transformation: str, agg: str, df: pd.DataFrame,
                     **kwargs) -> None:
@@ -466,13 +531,9 @@ class SAM(TrainingScheme):
 
     def build_exog(self, symbol: str, df: pd.DataFrame, transformation: str, **kwargs) -> pd.DataFrame:
         if self._model_type not in ['risk_metrics']:
-            try:
-                exog = \
-                    TrainingScheme._factory_model_type_dd[self._model_type].builder(F=self._F,
-                                                                                    df=df, symbol=symbol, **kwargs)
-            except TypeError as e:
-                print(e)
-                pdb.set_trace()
+            exog = \
+                TrainingScheme._factory_model_type_dd[self._model_type].builder(F=self._F,
+                                                                                df=df, symbol=symbol, **kwargs)
         else:
             exog = df[[symbol]]
         return exog
@@ -483,7 +544,7 @@ class SAM(TrainingScheme):
         #     start_time = time.perf_counter()
         #     self.add_metrics_per_symbol(symbol=symbol, transformation=transformation, regression_type=regression_type,
         #                                 df=df, agg=agg, **kwargs)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
             futures = [executor.submit(self.add_metrics_per_symbol, symbol=symbol, transformation=transformation,
                                        regression_type=regression_type, df=df, agg=agg, **kwargs)
                        for symbol in df.columns]
@@ -529,10 +590,17 @@ class ClustAM(TrainingScheme):
         ClustAM._clusters_trained = True
 
     def cluster_members(self, symbol: str) -> typing.Union[str, typing.List[str]]:
-        for cluster, members in ClustAM._cluster_group.groups.items():
-            if symbol in members:
-                members_ls = list(members)
-        return symbol, members_ls
+        # for cluster, members in ClustAM._cluster_group.groups.items():
+        #     if symbol in members:
+        #         members_ls = list(members)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+            futures = [executor.submit(lambda x, y: (x, y), x=cluster, y=members) for
+                       cluster, members in ClustAM._cluster_group.groups.items()]
+            for future in concurrent.futures.as_completed(futures):
+                _, members = future.result()
+                if symbol in members:
+                    members_ls = list(members)
+                    return symbol, members_ls
 
     def build_exog(self, symbol: typing.Union[str, typing.List[str]], df: pd.DataFrame, transformation: str, **kwargs)\
             -> typing.Union[pd.DataFrame, str]:
@@ -554,7 +622,7 @@ class ClustAM(TrainingScheme):
         #     _, member_ls = self.cluster_members(symbol)
         #     self.add_metrics_per_symbol(symbol=symbol, df=df[member_ls], agg=agg, regression_type=regression_type,
         #                                 transformation=transformation, cluster=member_ls, **kwargs)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
             futures = [executor.submit(lambda x: (self.cluster_members(symbol), symbol)) for symbol in df.columns]
             for future in concurrent.futures.as_completed(futures):
                 member, symbol = future.result()
@@ -597,7 +665,7 @@ class CAM(TrainingScheme):
         #     print(f'[Data Process]: Process for {symbol} has started...')
         #     self.add_metrics_per_symbol(symbol=symbol, df=df, agg=agg, regression_type=regression_type,
         #                                 transformation=transformation, **kwargs)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
             futures = [executor.submit(self.add_metrics_per_symbol, symbol=symbol, transformation=transformation,
                                        regression_type=regression_type, df=df, agg=agg, **kwargs)
                        for symbol in df.columns]
@@ -654,7 +722,7 @@ class UAM(TrainingScheme):
         self._regression_type = regression_type
 
     def objective(self, trial: optuna.trial.Trial, train: pd.DataFrame, valid: pd.DataFrame) -> float:
-        date = pd.to_datetime(trial.study.study_name.split('_')[-1]).date()
+        # date = pd.to_datetime(trial.study.study_name.split('_')[-1]).date()
         if self._regression_type == 'lightgbm':
             y_train = train.copy().pop('RV')
             y_valid = valid.copy().pop('RV')
@@ -825,14 +893,14 @@ class UAM(TrainingScheme):
                     df.loc[:, df.columns.str.contains('RV')])
             df = pd.concat([df, one_hot_encoding], axis=1)
             model_s = pd.Series(data=np.nan, index=dates[start_idx:])
-            with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
                 futures = [executor.submit(self.add_metrics_freq, transformation, df, date, idx, **kwargs) for idx, date
                            in enumerate(dates[start_idx:])]
                 for future in concurrent.futures.as_completed(futures):
                     date, model = future.result()
                     model_s[date] = model
             model_s = model_s.ffill().dropna()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
                 if self._regression_type != 'lightgbm':
                     futures = [executor.submit(lambda x, df, model: reshape_dataframe(x, df, model), x=date, df=df,
                                                model=model_s[date]) for date in model_s.index]
@@ -862,35 +930,35 @@ class UAM(TrainingScheme):
             y = pd.concat(y)
             y = df[['RV']].loc[y.index.unique(), :].join(y, how='inner')
             y = y.rename(columns={'RV': 'y', 0: 'y_hat'})
-        # else:
-        #     vars_dd = dict()
-        #     var_obj = VAR_Model()
-        #     with concurrent.futures.ThreadPoolExecutor() as executor:
-        #         futures = \
-        #             [executor.submit(var_obj.var_train, idx, date, df, self._L, self._transformation,
-        #                              self._factory_transformation_dd, **kwargs) for idx, date
-        #              in enumerate(dates[start_idx:])]
-        #         for future in concurrent.futures.as_completed(futures):
-        #             date, var = future.result()
-        #             vars_dd[date] = var
-        #     vars_dd = pd.DataFrame(vars_dd.items()).set_index(0).sort_index().ffill()
-        #     vars_dd = dict(zip(vars_dd.index, vars_dd.iloc[:, 0]))
-        #     with concurrent.futures.ThreadPoolExecutor() as executor:
-        #         futures = [executor.submit(var_obj.var_forecast, var_model, date, df, self._L, self._b) for date,
-        #         var_model in vars_dd.items()]
-        #         for future in concurrent.futures.as_completed(futures):
-        #             y.append(future.result())
-        #     y_hat = pd.concat(y).sort_index().unstack()
-        #     y = \
-        #         self.factory_transformation_dd[transformation]['transformation'](
-        #         df.loc[df.index.isin(y_hat.index.get_level_values(1).unique()), :])
-        #     y = y.unstack()
-        #     y = pd.concat([y, y_hat], axis=1)
-        #     y = \
-        #         y.reset_index().rename(columns={'level_0': 'symbol',
-        #                                         'level_1': 'timestamp',
-        #                                         0: 'y',
-        #                                         1: 'y_hat'}).set_index(['symbol', 'timestamp'])
+        else:
+            vars_dd = dict()
+            var_obj = VAR_Model()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = \
+                    [executor.submit(var_obj.var_train, idx, date, df, self._L, self._transformation,
+                                     self._factory_transformation_dd, **kwargs) for idx, date
+                     in enumerate(dates[start_idx:])]
+                for future in concurrent.futures.as_completed(futures):
+                    date, var = future.result()
+                    vars_dd[date] = var
+            vars_dd = pd.DataFrame(vars_dd.items()).set_index(0).sort_index().ffill()
+            vars_dd = dict(zip(vars_dd.index, vars_dd.iloc[:, 0]))
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = [executor.submit(var_obj.var_forecast, var_model, date, df, self._L, self._b) for date,
+                var_model in vars_dd.items()]
+                for future in concurrent.futures.as_completed(futures):
+                    y.append(future.result())
+            y_hat = pd.concat(y).sort_index().unstack()
+            y = \
+                self.factory_transformation_dd[transformation]['transformation'](
+                df.loc[df.index.isin(y_hat.index.get_level_values(1).unique()), :])
+            y = y.unstack()
+            y = pd.concat([y, y_hat], axis=1)
+            y = \
+                y.reset_index().rename(columns={'level_0': 'symbol',
+                                                'level_1': 'timestamp',
+                                                0: 'y',
+                                                1: 'y_hat'}).set_index(['symbol', 'timestamp'])
         y = self.factory_transformation_dd[transformation]['inverse'](y).sort_index(axis=0, level=[0, 1])
         y = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)]).sum()
         if kwargs.get('trading_session') in [1, None]:
@@ -899,51 +967,77 @@ class UAM(TrainingScheme):
             tmp = \
                 y.loc[~y.index.get_level_values(0).str.contains('VIXM'), :].groupby(
                     by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=agg)])
-        mse = \
-            tmp.apply(lambda x: mean_squared_error(x.iloc[:, 0], x.iloc[:, 1])).reset_index(0).rename(
-                columns={0: 'values'})
         qlike = tmp.apply(qlike_score).reset_index(0).rename(columns={0: 'values'})
         y = y.reset_index(0)
-        con_dd = {'qlike': TrainingScheme._db_connect_qlike, 'mse': TrainingScheme._db_connect_mse,
-                  'y': TrainingScheme._db_connect_y}
-        table_dd = {'y': y, 'mse': mse, 'qlike': qlike}
+        con_dd = {'qlike': TrainingScheme._db_connect_qlike, 'y': TrainingScheme._db_connect_y}
+        table_dd = {'y': y, 'qlike': qlike}
         if regression_type == 'var':
             r2 = tmp.apply(lambda x: r2_score(x.iloc[:, 0], x.iloc[:, -1])).reset_index(0).rename(columns={0: 'values'})
             con_dd.update({'r2': TrainingScheme._db_connect_r2})
             table_dd.update({'r2': r2})
         transformation_dd = {'log': 'log', None: 'level'}
-        count = 1
         del kwargs['freq']
         if 'vixm' in kwargs.keys():
             del kwargs['vixm']
-        for table_name, table in table_dd.items():
-            table = table.assign(model=self._model_type, L=self._L, training_scheme=self.__class__.__name__,
-                                 regression=regression_type, transformation=transformation_dd[transformation],
-                                 h=self._h, **kwargs)
-            if table_name in ['qlike', 'mse', 'r2']:
-                table = table.assign(metric=table_name)
-            elif table_name == 'feature_importance':
-                table = table.drop('regression', axis=1)
-            if len(kwargs) == 0:
-                table = table.assign(trading_session=kwargs.get('trading_session'), top_book=kwargs.get('top_book'))
-            if table_name != 'feature_importance':
-                table = table.join(rv_mkt.reindex(table.index).ffill(), how='left')
-                table = table.groupby([table.index, 'symbol']).last().reset_index(-1)
-            table.to_sql(if_exists='append', con=con_dd[table_name], name=f'{table_name}_{self._L}') if \
-                table_name != 'feature_importance' else table.to_sql(if_exists='append', con=con_dd[table_name],
-                                                                     name=f'{table_name}')
-            if table_name != 'feature_importance':
-                print(f'[Insertion]: '
-                      f'Tables for '
-                      f'{self.__class__.__name__}_{self._L}_{transformation_dd[transformation]}_{regression_type}_'
-                      f'{self._model_type}'
-                      f' have been inserted into the database ({count})....')
-            else:
-                model_type = {False: self._model_type, True: 'ar'}[self._model_type is None]
-                print(f'[Insertion]: '
-                      f'Table for {self.__class__.__name__}_{self._L}_{model_type}'
-                      f' has been inserted into the database ({count})....')
-            count += 1
+        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+            futures = [executor.submit(lambda x, y: (x, y), x=table_name,
+                                       y=table) for table_name, table in table_dd.items()]
+            for count, future in enumerate(concurrent.futures.as_completed(futures)):
+                table_name, table = future.result()
+                table = table.assign(model=self._model_type, L=self._L, training_scheme=self.__class__.__name__,
+                                     regression=regression_type, transformation=transformation_dd[transformation],
+                                     h=self._h, **kwargs)
+                if table_name in ['qlike', 'mse', 'r2']:
+                    table = table.assign(metric=table_name)
+                elif table_name == 'feature_importance':
+                    table = table.drop('regression', axis=1)
+                if len(kwargs) == 0:
+                    table = table.assign(trading_session=kwargs.get('trading_session'), top_book=kwargs.get('top_book'))
+                if table_name != 'feature_importance':
+                    table = table.join(rv_mkt.reindex(table.index).ffill(), how='left')
+                    table = table.groupby([table.index, 'symbol']).last().reset_index(-1)
+                table.to_sql(if_exists='append', con=con_dd[table_name], name=f'{table_name}_{self._L}') if \
+                    table_name != 'feature_importance' else table.to_sql(if_exists='append', con=con_dd[table_name],
+                                                                         name=f'{table_name}')
+                if table_name != 'feature_importance':
+                    print(f'[Insertion]: '
+                          f'Tables for '
+                          f'{self.__class__.__name__}_{self._L}_{transformation_dd[transformation]}_{regression_type}_'
+                          f'{self._model_type}'
+                          f' have been inserted into the database ({count+1})....')
+                else:
+                    model_type = {False: self._model_type, True: 'ar'}[self._model_type is None]
+                    print(f'[Insertion]: '
+                          f'Table for {self.__class__.__name__}_{self._L}_{model_type}'
+                          f' has been inserted into the database ({count+1})....')
+        # for table_name, table in table_dd.items():
+        #     table = table.assign(model=self._model_type, L=self._L, training_scheme=self.__class__.__name__,
+        #                          regression=regression_type, transformation=transformation_dd[transformation],
+        #                          h=self._h, **kwargs)
+        #     if table_name in ['qlike', 'mse', 'r2']:
+        #         table = table.assign(metric=table_name)
+        #     elif table_name == 'feature_importance':
+        #         table = table.drop('regression', axis=1)
+        #     if len(kwargs) == 0:
+        #         table = table.assign(trading_session=kwargs.get('trading_session'), top_book=kwargs.get('top_book'))
+        #     if table_name != 'feature_importance':
+        #         table = table.join(rv_mkt.reindex(table.index).ffill(), how='left')
+        #         table = table.groupby([table.index, 'symbol']).last().reset_index(-1)
+        #     table.to_sql(if_exists='append', con=con_dd[table_name], name=f'{table_name}_{self._L}') if \
+        #         table_name != 'feature_importance' else table.to_sql(if_exists='append', con=con_dd[table_name],
+        #                                                              name=f'{table_name}')
+        #     if table_name != 'feature_importance':
+        #         print(f'[Insertion]: '
+        #               f'Tables for '
+        #               f'{self.__class__.__name__}_{self._L}_{transformation_dd[transformation]}_{regression_type}_'
+        #               f'{self._model_type}'
+        #               f' have been inserted into the database ({count})....')
+        #     else:
+        #         model_type = {False: self._model_type, True: 'ar'}[self._model_type is None]
+        #         print(f'[Insertion]: '
+        #               f'Table for {self.__class__.__name__}_{self._L}_{model_type}'
+        #               f' has been inserted into the database ({count})....')
+        #     count += 1
 
 
 
