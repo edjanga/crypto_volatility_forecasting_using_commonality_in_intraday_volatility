@@ -203,6 +203,14 @@ class TrainingScheme(object):
                   y_valid: pd.DataFrame):
         regression_type = trial.study.study_name.split('_')[3]
         if regression_type == 'lightgbm':
+            date = trial.study.study_name.split('_')[-1]
+            date_prev = datetime.strptime(trial.study.study_name.split('_')[-1], '%Y-%m-%d')-relativedelta(days=1)
+            date_prev = date_prev.strftime('%Y-%m-%d')
+            tmp_model_dir = '../model/tmp'
+            tmp_model_path = '/'.join((tmp_model_dir, trial.study.study_name))
+            prev_tmp_model_path = '/'.join((tmp_model_dir, trial.study.study_name.replace(date, date_prev)))
+            if not os.path.exists(os.path.relpath(start='.', path=tmp_model_dir)):
+                os.makedirs(tmp_model_dir)
             train_loader, valid_loader = lgb.Dataset(X_train, label=y_train), lgb.Dataset(X_valid, label=y_valid)
             param = {
                 'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
@@ -216,27 +224,33 @@ class TrainingScheme(object):
             tmp_rres = lgb.train(param, train_set=train_loader, valid_sets=[valid_loader],
                                  num_boost_round=NUM_BOOST_ROUND,
                                  callbacks=[lgb.early_stopping(STOPPING_ROUNDS,
-                                                               first_metric_only=True, verbose=True, min_delta=0.0)])
+                                                               first_metric_only=True, verbose=True, min_delta=0.0)],
+                                 init_model={True: os.path.relpath(start='.', path=prev_tmp_model_path),
+                                             False: None}[os.path.exists(os.path.relpath(start='.',
+                                                                                         path=prev_tmp_model_path))])
         elif regression_type == 'lasso':
             param = {'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
                      'alpha': trial.suggest_float('alpha', 1e-4, 1e-1, log=False)
                      }
             tmp_rres = Lasso(alpha=param['alpha'], fit_intercept=True, random_state=123, max_iter=MAX_ITER,
-                             warm_start=True)
+                             warm_start=True, selection='random')
         elif regression_type == 'elastic':
             param = {'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
                      'alpha': trial.suggest_float('alpha', 1e-4, 1e-1, log=False),
                      'l1_ratio': trial.suggest_float('l1_ratio', .01, .99, log=False)
                      }
             tmp_rres = ElasticNet(alpha=param['alpha'], l1_ratio=param['l1_ratio'], fit_intercept=True,
-                                  max_iter=MAX_ITER, random_state=123)
+                                  max_iter=MAX_ITER, random_state=123, selection='random')
         elif regression_type == 'ridge':
             param = {'alpha': trial.suggest_float('alpha', 1e-4, 1e-1, log=False)}
             tmp_rres = Ridge(alpha=param['alpha'], max_iter=MAX_ITER, fit_intercept=True)
-        if regression_type not in ['lightgbm', 'xgboost']:
+        if regression_type != 'lightgbm':
             tmp_rres.fit(X_train, y_train)
         loss = mean_squared_error(y_valid, tmp_rres.predict(X_valid))
         trial.set_user_attr(key='best_estimator', value=tmp_rres)
+        if regression_type == 'lightgbm':
+            trial.user_attrs['best_estimator'].save_model(tmp_model_path)
+            os.remove(os.path.relpath(start='.', path=prev_tmp_model_path))
         return loss
 
     @staticmethod
