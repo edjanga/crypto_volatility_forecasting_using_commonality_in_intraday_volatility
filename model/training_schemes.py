@@ -47,9 +47,6 @@ EARLY_STOPPING_PATIENCE = 5
 class TrainingScheme(object):
     _reader_obj = Reader()
     _data_centre_dir = os.path.abspath(__file__).replace('/model/training_schemes.py', '/data_centre')
-    _db_connect_coefficient = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/'
-                                                                       f'databases/coefficients.db'),
-                                              check_same_thread=False)
     _db_connect_qlike = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases'
                                                                  f'/qlike.db'),
                                         check_same_thread=False)
@@ -64,14 +61,8 @@ class TrainingScheme(object):
     coins = [''.join((coin, 'usdt')).upper() for _, coin in enumerate(coin_ls)]
     global coins_dd
     coins_dd = {coin: {} for coin in coins}
-    _training_scheme_r2_dd = coins_dd.copy().copy()
     _training_scheme_y_dd = coins_dd.copy().copy()
     _training_scheme_qlike_dd = coins_dd.copy().copy()
-    _training_scheme_mse_dd = coins_dd.copy().copy()
-    _training_scheme_tstats_dd = coins_dd.copy().copy()
-    _training_scheme_pvalues_dd = coins_dd.copy().copy()
-    _training_scheme_coefficient_dd = coins_dd.copy().copy()
-    _training_scheme_1st_comp_weights_dd = coins_dd.copy().copy()
     L_shift_dd = {'5T': pd.to_timedelta('5T') // pd.to_timedelta('5T'),
                   '30T': pd.to_timedelta('30T') // pd.to_timedelta('5T'),
                   '1H': pd.to_timedelta('1H') // pd.to_timedelta('5T'),
@@ -250,7 +241,8 @@ class TrainingScheme(object):
         trial.set_user_attr(key='best_estimator', value=tmp_rres)
         if regression_type == 'lightgbm':
             trial.user_attrs['best_estimator'].save_model(tmp_model_path)
-            os.remove(os.path.relpath(start='.', path=prev_tmp_model_path))
+            if os.path.exists(os.path.relpath(start='.', path=prev_tmp_model_path)):
+                os.remove(os.path.relpath(start='.', path=prev_tmp_model_path))
         return loss
 
     @staticmethod
@@ -261,8 +253,7 @@ class TrainingScheme(object):
     def rolling_metrics_per_date(self, date: datetime, symbol: str, regression_type: str,
                                  exog: pd.DataFrame, endog: pd.DataFrame, transformation: str,
                                  **kwargs) -> (datetime, object):
-        if (kwargs['idx'] == 0) | (training_freq(date, freq=kwargs['freq'])) | \
-                (self._model_type in ['risk_metrics']):
+        if (kwargs['idx'] == 0) | (training_freq(date, freq=kwargs['freq'])) | (self._model_type in ['risk_metrics']):
             train_index = list(set(exog.index[(exog.index.date >= date - L_train) & (exog.index.date < date)]))
             train_index.sort()
             test_index = list(set(exog.index[exog.index.date == date]))
@@ -740,6 +731,14 @@ class UAM(TrainingScheme):
         if self._regression_type == 'lightgbm':
             y_train = train.copy().pop('RV')
             y_valid = valid.copy().pop('RV')
+            date = trial.study.study_name.split('_')[-1]
+            date_prev = datetime.strptime(trial.study.study_name.split('_')[-1], '%Y-%m-%d') - relativedelta(days=1)
+            date_prev = date_prev.strftime('%Y-%m-%d')
+            tmp_model_dir = '../model/tmp'
+            tmp_model_path = '/'.join((tmp_model_dir, trial.study.study_name))
+            prev_tmp_model_path = '/'.join((tmp_model_dir, trial.study.study_name.replace(date, date_prev)))
+            if not os.path.exists(os.path.relpath(start='.', path=tmp_model_dir)):
+                os.makedirs(tmp_model_dir)
             train_loader, valid_loader = lgb.Dataset(train.drop('RV', axis=1), label=y_train),\
                 lgb.Dataset(valid.drop('RV', axis=1), label=y_valid)
             param = {
@@ -752,13 +751,29 @@ class UAM(TrainingScheme):
                 'device': {False: 'cpu', True: 'gpu'}[DEVICE == 'cuda']
             }
             model = \
-                lgb.train(param, train_set=train_loader, valid_sets=[valid_loader], num_boost_round=NUM_BOOST_ROUND,
-                          callbacks=
-                          [lgb.early_stopping(STOPPING_ROUNDS, first_metric_only=True, verbose=True, min_delta=0.0)],
-                          categorical_feature=train.columns[train.columns.str.contains('is')].tolist())
+                lgb.train(param,
+                          train_set=train_loader, valid_sets=[valid_loader], num_boost_round=NUM_BOOST_ROUND,
+                          callbacks=\
+                              [lgb.early_stopping(STOPPING_ROUNDS, first_metric_only=True, verbose=True, min_delta=0.0)],
+                          categorical_feature=train.columns[train.columns.str.contains('is')].tolist(),
+                          init_model={True: os.path.relpath(start='.', path=prev_tmp_model_path),
+                                      False: None}[os.path.exists(os.path.relpath(start='.',
+                                                                                  path=prev_tmp_model_path))]
+                          )
             trial.set_user_attr(key='best_score', value=model.best_score['valid_0']['l2'])
+            trial.user_attrs['best_estimator'].save_model(tmp_model_path)
+            if os.path.exists(os.path.relpath(start='.', path=prev_tmp_model_path)):
+                os.remove(os.path.relpath(start='.', path=prev_tmp_model_path))
         else:
             train_date = train.index.get_level_values(1).unique().tolist()
+            date = trial.study.study_name.split('_')[-1]
+            date_prev = datetime.strptime(trial.study.study_name.split('_')[-1], '%Y-%m-%d') - relativedelta(days=1)
+            date_prev = date_prev.strftime('%Y-%m-%d')
+            tmp_model_dir = '../model/tmp'
+            tmp_model_path = '/'.join((tmp_model_dir, trial.study.study_name))
+            prev_tmp_model_path = '/'.join((tmp_model_dir, trial.study.study_name.replace(date, date_prev)))
+            if not os.path.exists(os.path.relpath(start='.', path=tmp_model_dir)):
+                os.makedirs(tmp_model_dir)
             params = {
                 'hidden_size': trial.suggest_categorical(name='hidden_size', choices=[2 ** i for i in range(3, 6)]),
                 'lr': trial.suggest_categorical(name='lr', choices=[1e-3, 5e-3, 1e-4]),
@@ -806,10 +821,15 @@ class UAM(TrainingScheme):
             if self._INPUT_SIZE is None:
                 self._INPUT_SIZE = train_dataloader.shape[1]-1
             if self._regression_type == 'lstm':
-                model = LSTM_NNModel(input_size=self._INPUT_SIZE, hidden_size=params['hidden_size'],
-                                     num_layers=params['num_layers'], mlp_hidden_size=params.get('mlp_hidden_size'),
-                                     mlp_num_layers=params.get('mlp_num_layers'), lr=params['lr'], output_size=1,
-                                     dropout_rate=params['dropout_prob'], batch_size=params['batch_size'])
+                if training_freq(date=datetime.strptime(date, '%Y-%m-%d').date()):
+                    model = LSTM_NNModel(input_size=self._INPUT_SIZE, hidden_size=params['hidden_size'],
+                                         num_layers=params['num_layers'], mlp_hidden_size=params.get('mlp_hidden_size'),
+                                         mlp_num_layers=params.get('mlp_num_layers'), lr=params['lr'], output_size=1,
+                                         dropout_rate=params['dropout_prob'], batch_size=params['batch_size'])
+                else:
+                    state = torch.load(os.path.relpath(start='.', path=prev_tmp_model_path))
+                    model = state.load_state_dict(state['model_state_dict'])
+                    model.eval()
             model.to(device=DEVICE)
             train_dataloader = \
                 DataLoader(torch.tensor(train_dataloader.values.reshape(BATCH_SIZE, TRAIN_SIZE, self._INPUT_SIZE + 1),
@@ -820,7 +840,8 @@ class UAM(TrainingScheme):
                                         dtype=torch.float32, device=DEVICE), shuffle=False, pin_memory=False,
                            batch_size=1)
             train_model(train=train_dataloader, valid=valid_dataloader, EPOCH=EPOCH, model=model,
-                        early_stopping_patience=EARLY_STOPPING_PATIENCE)
+                        early_stopping_patience=EARLY_STOPPING_PATIENCE,
+                        init=training_freq(date=datetime.strptime(date, '%Y-%m-%d').date()))
             y_hat = model(valid_dataloader.dataset[:, :, 1:])
             y = valid_dataloader.dataset[:, :, 0].view(y_hat.shape)
             """Scale back to original scale"""
@@ -845,6 +866,9 @@ class UAM(TrainingScheme):
             model.scaling_second = second
             model.scaling_third = third
             model.scaling_name = params['scaling']
+            torch.save(model.state_dict(), tmp_model_path)
+            if os.path.exists(os.path.relpath(start='.', path=prev_tmp_model_path)):
+                os.remove(os.path.relpath(start='.', path=prev_tmp_model_path))
         trial.set_user_attr(key='best_estimator', value=model)
         return trial.user_attrs['best_score']
 
@@ -907,12 +931,15 @@ class UAM(TrainingScheme):
                     df.loc[:, df.columns.str.contains('RV')])
             df = pd.concat([df, one_hot_encoding], axis=1)
             model_s = pd.Series(data=np.nan, index=dates[start_idx:])
-            with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
-                futures = [executor.submit(self.add_metrics_freq, transformation, df, date, idx, **kwargs) for idx, date
-                           in enumerate(dates[start_idx:])]
-                for future in concurrent.futures.as_completed(futures):
-                    date, model = future.result()
-                    model_s[date] = model
+            for idx, date in enumerate(dates[start_idx:]):
+                date, model = self.add_metrics_freq(transformation=transformation, df=df, date=date, idx=idx, **kwargs)
+                model_s[date] = model
+            # with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+            #     futures = [executor.submit(self.add_metrics_freq, transformation, df, date, idx, **kwargs) for idx, date
+            #                in enumerate(dates[start_idx:])]
+            #     for future in concurrent.futures.as_completed(futures):
+            #         date, model = future.result()
+            #         model_s[date] = model
             model_s = model_s.ffill().dropna()
             with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
                 if self._regression_type != 'lightgbm':
