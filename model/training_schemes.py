@@ -326,8 +326,8 @@ class TrainingScheme(object):
                           f'has been completed.')
                 return date, pipeline
 
-    def rolling_metrics(self, exog: pd.DataFrame, agg: str, transformation: str,
-                        regression_type: str = 'linear', **kwargs) -> typing.Union[None, typing.Tuple[pd.Series]]:
+    def rolling_metrics(self, exog: pd.DataFrame, transformation: str, regression_type: str = 'linear',
+                        **kwargs) -> typing.Union[None, typing.Tuple[pd.Series]]:
         global L_train
         global endog
         global factor_obj
@@ -403,7 +403,7 @@ class TrainingScheme(object):
         y = y.join(endog, how='left').sort_index().set_index('symbol', append=True).swaplevel(-1, 0)
         y = TrainingScheme._factory_transformation_dd[transformation]['inverse'](y)
         y = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)]).sum()
-        tmp = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)]) #agg
+        tmp = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)])
         qlike = tmp.apply(qlike_score)
         qlike = pd.Series(qlike, name=symbol)
         qlike = pd.melt(pd.DataFrame(qlike), ignore_index=False, value_name='values', var_name='symbol')
@@ -428,7 +428,7 @@ class TrainingScheme(object):
                     table = table.drop('regression', axis=1)
                 training_scheme_tables[table_name][symbol] = table
 
-    def add_metrics_per_symbol(self, symbol: str, df: pd.DataFrame, agg: str, transformation: str,
+    def add_metrics_per_symbol(self, symbol: str, df: pd.DataFrame, transformation: str,
                                regression_type: str = 'linear', **kwargs) -> None:
         kwargs_copy = kwargs.copy()
         del kwargs_copy['freq']
@@ -444,7 +444,7 @@ class TrainingScheme(object):
         exog = exog.fillna(exog.ewm(span=12, min_periods=1).mean())
         transformation_dd = {'log': 'log', None: 'level'}
         self.rolling_metrics(
-            symbol=symbol, regression_type=regression_type, transformation=transformation, agg=agg, exog=exog, **kwargs
+            symbol=symbol, regression_type=regression_type, transformation=transformation, exog=exog, **kwargs
         )
         y = self._training_scheme_y_dd[symbol]
         qlike = self._training_scheme_qlike_dd[symbol]
@@ -474,7 +474,7 @@ class TrainingScheme(object):
                           f'Table for {self.__class__.__name__}_{self._L}_{self._model_type}_{symbol}'
                           f' has been inserted into the database ({count+1})....')
 
-    def add_metrics(self, regression_type: str, transformation: str, agg: str, df: pd.DataFrame,
+    def add_metrics(self, regression_type: str, transformation: str, df: pd.DataFrame,
                     **kwargs) -> None:
         pass
 
@@ -494,11 +494,11 @@ class SAM(TrainingScheme):
             exog = df[[symbol]]
         return exog
 
-    def add_metrics(self, df: pd.DataFrame, agg: str, transformation: str, regression_type: str = 'linear',
+    def add_metrics(self, df: pd.DataFrame, transformation: str, regression_type: str = 'linear',
                     **kwargs) -> None:
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [executor.submit(self.add_metrics_per_symbol, symbol=symbol, transformation=transformation,
-                                       regression_type=regression_type, df=df, agg=agg, **kwargs)
+                                       regression_type=regression_type, df=df, **kwargs)
                        for symbol in df.columns]
 
 
@@ -560,7 +560,7 @@ class ClustAM(TrainingScheme):
                                                                             **kwargs)
         return exog
 
-    def add_metrics(self, regression_type: str, transformation: str, agg: str, df: pd.DataFrame, **kwargs) -> None:
+    def add_metrics(self, regression_type: str, transformation: str, df: pd.DataFrame, **kwargs) -> None:
         if (self._model_type == 'har_eq') & (kwargs.get('trading_session') == 0):
             self._universe = self._universe+kwargs['vixm'].columns.tolist()
             df = TrainingScheme._factory_model_type_dd[self._model_type].builder(F=self._F, df=df, symbol=df.columns,
@@ -572,7 +572,7 @@ class ClustAM(TrainingScheme):
                 [executor.submit(lambda x: self.cluster_members(x), x=symbol) for symbol in df.columns]
             for future in concurrent.futures.as_completed(futures):
                 symbol, member_ls = future.result()
-                self.add_metrics_per_symbol(symbol=symbol, df=df[member_ls], agg=agg, regression_type=regression_type,
+                self.add_metrics_per_symbol(symbol=symbol, df=df[member_ls], regression_type=regression_type,
                                             transformation=transformation, cluster=member_ls, **kwargs)
 
     @property
@@ -602,17 +602,13 @@ class CAM(TrainingScheme):
                                                                                **kwargs)
         return exog
 
-    def add_metrics(self, regression_type: str, transformation: str, agg: str, df: pd.DataFrame, **kwargs) -> None:
+    def add_metrics(self, regression_type: str, transformation: str, df: pd.DataFrame, **kwargs) -> None:
         if (self._model_type == 'har_eq') & (kwargs.get('trading_session') == 0):
             self._universe = self._universe+kwargs['vixm'].columns.tolist()
             df = self.build_exog(df, transformation, **kwargs)
-        # for symbol in self._universe:
-        #     print(f'[Data Process]: Process for {symbol} has started...')
-        #     self.add_metrics_per_symbol(symbol=symbol, df=df, agg=agg, regression_type=regression_type,
-        #                                 transformation=transformation, **kwargs)
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [executor.submit(self.add_metrics_per_symbol, symbol=symbol, transformation=transformation,
-                                       regression_type=regression_type, df=df, agg=agg, **kwargs)
+                                       regression_type=regression_type, df=df, **kwargs)
                        for symbol in df.columns]
 
     @property
@@ -839,7 +835,7 @@ class UAM(TrainingScheme):
         print(f'[End of Training]: Training on {date} has been completed.')
         return date, model
 
-    def add_metrics(self, regression_type: str, transformation: str, agg: str, df: pd.DataFrame, **kwargs) -> None:
+    def add_metrics(self, regression_type: str, transformation: str, df: pd.DataFrame, **kwargs) -> None:
         self._regression_type = regression_type
         self._transformation = transformation
         try:
@@ -952,11 +948,11 @@ class UAM(TrainingScheme):
         y = self.factory_transformation_dd[transformation]['inverse'](y).sort_index(axis=0, level=[0, 1])
         y = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)]).sum()
         if kwargs.get('trading_session') in [1, None]:
-            tmp = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=agg)])
+            tmp = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)])
         else:
             tmp = \
                 y.loc[~y.index.get_level_values(0).str.contains('VIXM'), :].groupby(
-                    by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=agg)])
+                    by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)])
         qlike = tmp.apply(qlike_score).reset_index(0).rename(columns={0: 'values'})
         y = y.reset_index(0)
         con_dd = {'qlike': TrainingScheme._db_connect_qlike, 'y': TrainingScheme._db_connect_y}
