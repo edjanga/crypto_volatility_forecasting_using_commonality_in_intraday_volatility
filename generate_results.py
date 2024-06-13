@@ -51,6 +51,6 @@ if __name__ == '__main__':
         vixm = Reader().rv_read(data='vixm')
         extra_args[True].update({'vixm': vixm.iloc[:, :top_book]}) if top_book == 1 else \
             extra_args[True].update({'vixm': vixm})
-    model_builder_obj.add_metrics(regression_type=args.regression_type, agg='1D', df=rv,
+    model_builder_obj.add_metrics(regression_type=args.regression_type, df=rv,
                                   transformation=args.transformation, **extra_args[args.model == 'har_eq'],
                                   freq=args.freq)
