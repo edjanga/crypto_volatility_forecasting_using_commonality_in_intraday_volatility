@@ -22,7 +22,6 @@ if __name__ == '__main__':
     parser.add_argument('--freq', default='1D', type=str, help='Frequency of model update.')
     parser.add_argument('--L', default='1W', help='Lookback window.')
     parser.add_argument('--regression_type', default='linear', help='For cross whether to allow for ensemble or not.')
-    parser.add_argument('--smoother_freq', default='1W', help='Frequency to use to smoothen results.')
     parser.add_argument('--transformation', default=None, type=str, help='Transformation to apply on features.')
     parser.add_argument('--trading_session', default=None, type=int, help='Trading session or VIXM for HAR_EQ.')
     parser.add_argument('--top_book', default=None, type=int, help='In case VIXM for previous param, top book or not.')
