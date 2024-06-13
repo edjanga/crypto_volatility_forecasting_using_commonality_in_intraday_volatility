@@ -29,7 +29,6 @@ if __name__ == '__main__':
     trading_session = args.trading_session
     top_book = args.top_book
     rv = data_obj.rv_read(variance=True, cutoff_low=.05, cutoff_high=.05)
-    agg = args.smoother_freq
     regression_type = args.regression_type
     training_scheme_obj = training_scheme_factory_dd[args.training_scheme]
     model_builder_obj = \
