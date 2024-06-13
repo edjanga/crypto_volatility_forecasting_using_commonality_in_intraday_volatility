@@ -15,7 +15,7 @@ from model.feature_engineering_room import FeatureAR, FeatureHAR, FeatureRiskMet
 import numpy as np
 import optuna
 from model.lab import training_freq, train_model, split_train_valid_set, lags, scaling, inverse_scaling,\
-    LSTM_NNModel, qlike_score, reshape_dataframe, VAR_Model
+    LSTM_NNModel, qlike_score, reshape_dataframe#, VAR_Model
 import torch
 from torch.utils.data import DataLoader
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
