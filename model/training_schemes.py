@@ -348,7 +348,7 @@ class TrainingScheme(object):
         endog = exog.pop(symbol)
         y = list()
         global dates
-        dates = list(np.unique(exog.index.date))
+        dates = list(np.unique(exog.index.date))[:10]
         L_train = relativedelta(days={'1W': 7, '1M': 30, '6M': 180}[self._L])
         start = dates[0] + L_train
         tmp_dd = dict()
@@ -383,20 +383,21 @@ class TrainingScheme(object):
                 tmp_model_path = '/'.join((tmp_model_dir, tmp_model_path))
                 os.remove(os.path.relpath(start='.', path=tmp_model_path))
         model_s = pd.Series(tmp_dd).sort_index()
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(lambda x: x, x=date) for date in dates[dates.index(start):]]
-            for future in concurrent.futures.as_completed(futures):
-                date = future.result()
-                if regression_type == 'pcr':
-                    own = exog.loc[exog.index.date == date, exog.columns.str.contains(symbol)]
-                    tmp_pca = model_s[date][0].transform(exog.loc[exog.index.date == date, ~exog.columns.str.contains(
-                        symbol)].values)
-                    y_hat = model_s[date][1].predict(np.hstack((tmp_pca, own)))
-                else:
-                    y_hat = model_s[date].predict(exog.loc[exog.index.date == date, :])
-                y.append(pd.Series(name=symbol, data=y_hat,
-                                   index=pd.date_range(start=date, end=date + relativedelta(days=1), freq='5T',
-                                                       inclusive='left')))
+        if self._model_type != 'risk_metrics':
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = [executor.submit(lambda x: x, x=date) for date in dates[dates.index(start):]]
+                for future in concurrent.futures.as_completed(futures):
+                    date = future.result()
+                    if regression_type == 'pcr':
+                        own = exog.loc[exog.index.date == date, exog.columns.str.contains(symbol)]
+                        tmp_pca = model_s[date][0].transform(exog.loc[exog.index.date == date,
+                        ~exog.columns.str.contains(symbol)].values)
+                        y_hat = model_s[date][1].predict(np.hstack((tmp_pca, own)))
+                    else:
+                        y_hat = model_s[date].predict(exog.loc[exog.index.date == date, :])
+                    y.append(pd.Series(name=symbol, data=y_hat,
+                                       index=pd.date_range(start=date, end=date + relativedelta(days=1), freq='5T',
+                                                           inclusive='left')))
         y = pd.DataFrame(pd.concat(y)).dropna()
         y.index.name = 'timestamp'
         y.index = pd.to_datetime(y.index, utc=True)
@@ -448,6 +449,8 @@ class TrainingScheme(object):
             symbol=symbol, regression_type=regression_type, transformation=transformation, exog=exog, **kwargs
         )
         y = self._training_scheme_y_dd[symbol]
+        y.columns = ['symbol', 'y_hat', 'y', 'model', 'L', 'training_scheme', 'regression', 'transformation',
+                     'trading_session', 'top_book', 'h']
         qlike = self._training_scheme_qlike_dd[symbol]
         con_dd = {'qlike': TrainingScheme._db_connect_qlike, 'y': TrainingScheme._db_connect_y}
         table_dd = {'qlike': qlike, 'y': y}
