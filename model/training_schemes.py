@@ -348,7 +348,7 @@ class TrainingScheme(object):
         endog = exog.pop(symbol)
         y = list()
         global dates
-        dates = list(np.unique(exog.index.date))[:10]
+        dates = list(np.unique(exog.index.date))
         L_train = relativedelta(days={'1W': 7, '1M': 30, '6M': 180}[self._L])
         start = dates[0] + L_train
         tmp_dd = dict()
@@ -691,8 +691,8 @@ class UAM(TrainingScheme):
             model = \
                 lgb.train(param,
                           train_set=train_loader, valid_sets=[valid_loader], num_boost_round=NUM_BOOST_ROUND,
-                          callbacks=\
-                              [lgb.early_stopping(STOPPING_ROUNDS, first_metric_only=True, verbose=True, min_delta=0.0)],
+                          callbacks=[lgb.early_stopping(STOPPING_ROUNDS, first_metric_only=True, verbose=True,
+                                                        min_delta=0.0)],
                           categorical_feature=train.columns[train.columns.str.contains('is')].tolist(),
                           init_model={True: os.path.relpath(start='.', path=prev_tmp_model_path),
                                       False: None}[os.path.exists(os.path.relpath(start='.',
