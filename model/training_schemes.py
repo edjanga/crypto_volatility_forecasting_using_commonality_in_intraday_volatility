@@ -194,7 +194,7 @@ class TrainingScheme(object):
         regression_type = trial.study.study_name.split('_')[3]
         if regression_type == 'lightgbm':
             date = trial.study.study_name.split('_')[-1]
-            date_prev = datetime.strptime(trial.study.study_name.split('_')[-1], '%Y-%m-%d')-relativedelta(days=idx)
+            date_prev = datetime.strptime(trial.study.study_name.split('_')[-1], '%Y-%m-%d') - relativedelta(days=idx)
             date_prev = date_prev.strftime('%Y-%m-%d')
             tmp_model_dir = '../model/tmp'
             tmp_model_path = '/'.join((tmp_model_dir, trial.study.study_name))
@@ -292,10 +292,11 @@ class TrainingScheme(object):
                                                    regression_type, self._model_type, symbol,
                                                    date.strftime('%Y-%m-%d')))
                         tmp_model_path = os.path.relpath(start='.', path='/'.join((tmp_model_dir, tmp_model_path)))
-                        rres_pca.fit(X_train.loc[:, ~X_train.columns.str.contains(symbol)].values)
+                        rres_pca.fit(X_train.values)
                         explained_variance_ratio = list(np.cumsum(rres_pca.explained_variance_ratio_) >= .9)
                         n_components = explained_variance_ratio.index(True) + 1
-                        rres_pca.n_components = n_components
+                        rres_pca = PCA(n_components)
+                        rres_pca.fit(X_train.values)
                         if not os.path.exists(os.path.relpath(start='.', path=tmp_model_dir)):
                             os.makedirs(tmp_model_dir)
                         with open(tmp_model_path, 'wb') as f:
@@ -310,15 +311,11 @@ class TrainingScheme(object):
                             rres_pca = pickle.load(f)
                     own_train, own_test = pd.DataFrame(), pd.DataFrame()
                     """If cluster group contains only more than one member"""
-                    if self.__class__.__name__ == 'ClustAM':
-                        if len(kwargs['cluster']) > 1:
-                            own_train, own_test = \
-                                X_train.loc[:, X_train.columns.str.contains(symbol)].loc[train_index, :],\
-                                    X_test.loc[:, X_test.columns.str.contains(symbol)].loc[test_index, :]
-                    X_train = \
-                        pd.DataFrame(rres_pca.transform(X_train.loc[:, ~X_train.columns.str.contains(symbol)].values),
-                                     index=X_train.index)
-                    X_train = pd.concat([X_train, own_train], axis=1)
+                    if (self.__class__.__name__ == 'ClustAM') & (len(kwargs['cluster']) > 1):
+                        own_train = X_train.loc[:, X_train.columns.str.contains(symbol)].loc[train_index, :]
+                    X_train = pd.DataFrame(rres_pca.transform(X_train.values), index=X_train.index)
+                    if (self.__class__.__name__ == 'ClustAM') & (len(kwargs['cluster']) > 1):
+                        X_train = pd.concat([X_train, own_train], axis=1)
                 rres.fit(X_train.values, y_train)
                 pipeline = Pipeline([('pca', rres_pca), ('linear', rres)]) if regression_type == 'pcr' else rres
                 end_tag = {True: 'training', False: 'fine tuning'}
@@ -348,7 +345,7 @@ class TrainingScheme(object):
         endog = exog.pop(symbol)
         y = list()
         global dates
-        dates = list(np.unique(exog.index.date))
+        dates = list(np.unique(exog.index.date))[:10]
         L_train = relativedelta(days={'1W': 7, '1M': 30, '6M': 180}[self._L])
         start = dates[0] + L_train
         tmp_dd = dict()
@@ -377,11 +374,12 @@ class TrainingScheme(object):
                     for idx, future in enumerate(concurrent.futures.as_completed(futures)):
                         date, model = future.result()
                         tmp_dd[date+relativedelta(days=idx+1)] = model
-                tmp_model_path = '_'.join((self.__class__.__name__, self._L, str(transformation),
-                                           regression_type, self._model_type, symbol, date.strftime('%Y-%m-%d')))
-                tmp_model_dir = '../model/tmp'
-                tmp_model_path = '/'.join((tmp_model_dir, tmp_model_path))
-                os.remove(os.path.relpath(start='.', path=tmp_model_path))
+                if regression_type in ['lightgbm', 'pcr']:
+                    tmp_model_path = '_'.join((self.__class__.__name__, self._L, str(transformation),
+                                               regression_type, self._model_type, symbol, date.strftime('%Y-%m-%d')))
+                    tmp_model_dir = '../model/tmp'
+                    tmp_model_path = '/'.join((tmp_model_dir, tmp_model_path))
+                    os.remove(os.path.relpath(start='.', path=tmp_model_path))
         model_s = pd.Series(tmp_dd).sort_index()
         if self._model_type != 'risk_metrics':
             with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -389,12 +387,18 @@ class TrainingScheme(object):
                 for future in concurrent.futures.as_completed(futures):
                     date = future.result()
                     if regression_type == 'pcr':
-                        own = exog.loc[exog.index.date == date, exog.columns.str.contains(symbol)]
-                        tmp_pca = model_s[date][0].transform(exog.loc[exog.index.date == date,
-                        ~exog.columns.str.contains(symbol)].values)
-                        y_hat = model_s[date][1].predict(np.hstack((tmp_pca, own)))
+                        tmp_pca = model_s[date][0].transform(exog.loc[exog.index.date == date, :].values)
+                        if self.__class__.__name__ != 'ClustAM':
+                            y_hat = model_s[date][1].predict(tmp_pca)
+                        else:
+                            own = exog.loc[exog.index.date == date, exog.columns.str.contains(symbol)].values
+                            try:
+                                y_hat = model_s[date][1].predict(np.hstack((tmp_pca, own)))
+                            except ValueError:
+                                # Cluster composed of one member
+                                y_hat = model_s[date][1].predict(tmp_pca)
                     else:
-                        y_hat = model_s[date].predict(exog.loc[exog.index.date == date, :])
+                        y_hat = model_s[date].predict(exog.loc[exog.index.date == date, :].values)
                     y.append(pd.Series(name=symbol, data=y_hat,
                                        index=pd.date_range(start=date, end=date + relativedelta(days=1), freq='5T',
                                                            inclusive='left')))
