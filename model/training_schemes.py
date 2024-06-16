@@ -345,7 +345,7 @@ class TrainingScheme(object):
         endog = exog.pop(symbol)
         y = list()
         global dates
-        dates = list(np.unique(exog.index.date))[:10]
+        dates = list(np.unique(exog.index.date))
         L_train = relativedelta(days={'1W': 7, '1M': 30, '6M': 180}[self._L])
         start = dates[0] + L_train
         tmp_dd = dict()
