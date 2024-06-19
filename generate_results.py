@@ -13,7 +13,7 @@ if __name__ == '__main__':
     ####################################################################################################################
     #### Fit models
     ####################################################################################################################
-    data_obj = Reader(5)
+    data_obj = Reader()
     parser = argparse.ArgumentParser(description='Model Lab: Fit and store model results of research project 1.')
     parser.add_argument('--training_scheme', default=False, help='Training scheme under which models are trained.',
                         type=str)
