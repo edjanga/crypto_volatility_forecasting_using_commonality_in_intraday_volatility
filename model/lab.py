@@ -1,3 +1,4 @@
+import concurrent.futures
 import pdb
 import typing
 from typing import Tuple
@@ -11,25 +12,32 @@ from dateutil.relativedelta import relativedelta
 import numpy as np
 from data_centre.data import Reader, DBQuery
 import sqlite3
-# import rpy2.robjects as ro
-# from rpy2.robjects.packages import importr
-# from rpy2.robjects import pandas2ri
+#import rpy2.robjects as ro
+#from rpy2.robjects.packages import importr
+#from rpy2.robjects import pandas2ri
 from datetime import datetime
 import plotly.express as px
 from statsmodels.tsa.api import VAR
 from statsmodels import tsa
 import pytz
 import plotly.io as pio
-# pandas2ri.activate()
-# var = importr("vars")
-# spillover = importr("Spillover")
+#pandas2ri.activate()
+#var = importr("vars")
+#spillover = importr("Spillover")
 pio.kaleido.scope.mathjax = None
+TITLE_FONT_SIZE = 40
+LABEL_AXIS_FONT_SIZE = 20
+LEGEND_FONT_SIZE = 18
+HEIGHT = 600
+WIDTH = 800
+FORMAT = '%Y-%m-%d'
 DEVICE = 'cpu'
 if torch.cuda.is_available():
     DEVICE = 'cuda'
 
 _data_centre_dir = os.path.abspath(__file__).replace('/model/lab.py', '/data_centre/databases')
 L_dd = {'1W': '7D', '1M': '30D', '6M': '180D'}
+
 
 """Functions used to facilitate computation within classes."""
 
@@ -190,7 +198,7 @@ class DMTest:
 class Commonality:
 
     _reader_obj = Reader()
-    _rv = _reader_obj.rv_read(variance=True)
+    _rv = _reader_obj.rv_read()
     _mkt = _rv.mean(axis=1)
     _commonality_connect_db = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/commonality.db'))
     _linear = LinearRegression()
@@ -226,7 +234,6 @@ class Commonality:
     def type_commonality(self, type_commonality: str):
         self._type_commonality = type_commonality
 
-
     @staticmethod
     def ols_closed_formula(df: pd.DataFrame) -> pd.DataFrame:
         y = df['RV'].values
@@ -239,37 +246,66 @@ class Commonality:
         return b
 
     def adj_r2_derive(self) -> pd.DataFrame:
-        format = '%Y-%m-%d'
         dates = np.unique(self._rv.index.date).tolist()
         start_idx = dates.index(dates[0] + relativedelta(days={'1W': 7, '1M': 30, '6M': 180}[self._L]))
         tmp = pd.Series(index=dates[start_idx:])
-        for idx, date in enumerate(dates[start_idx:]):
-            adj_r2 = self._rv.loc[
-                (date-relativedelta(days={'1W': 7, '1M': 30, '6M': 180}[self._L])).strftime(format):
-                (date-relativedelta(days=1)).strftime(format)]
-            mkt = adj_r2.mean(axis=1)
-            mkt.name = '$RV_{M}$'
-            adj_r2 = pd.melt(adj_r2, var_name='symbol', value_name='RV', ignore_index=False)
-            adj_r2 = adj_r2.join(mkt)
-            adj_r2 = adj_r2.assign(intercept=1.0)
-            adj_r2.index.name = 'timestamp'
-            adj_r2 = adj_r2.reset_index().set_index(['symbol', 'timestamp']).sort_index(level=['symbol', 'timestamp'])
-            adj_r2_group = adj_r2.groupby(by=[pd.Grouper(level='symbol')])
-            coef = adj_r2_group.apply(lambda x: self.ols_closed_formula(x)).droplevel(axis=0, level=-1).reset_index()
-            coef = adj_r2.reset_index(level=0).merge(coef, left_on='symbol', right_on='symbol').filter(regex=f'_y')
-            coef.columns = coef.columns.str.replace('_y', '')
-            coef = coef.assign(symbol=adj_r2.index.get_level_values(0), timestamp=adj_r2.index.get_level_values(1))
-            coef = coef.set_index(['symbol', 'timestamp'])
-            adj_r2.loc[:, 'RV_hat'] = adj_r2.loc[:, coef.columns].mul(coef).sum(axis=1)
-            adj_r2 = adj_r2.filter(regex=f'RV').drop(axis=1, columns='$RV_{M}$')
-            adj_r2 = self._factory_transformation_dd[self._transformation]['transformation'](adj_r2)
-            adj_r2 = adj_r2.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq='D')])
-            adj_r2 = adj_r2.apply(lambda x:
-                                  1 - (1 - r2_score(x.iloc[:, 0], x.iloc[:, -1])) * (x.shape[0] - 1) / (x.shape[0] - 2))
-            tmp.loc[date.strftime(format)] = adj_r2.groupby(by=[pd.Grouper(level='symbol')]).mean().mean()
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(lambda x: x, x=date) for date in dates[start_idx:]]
+            for future in concurrent.futures.as_completed(futures):
+                date = future.result()
+                adj_r2 = self._rv.loc[
+                         (date - relativedelta(days={'1W': 7, '1M': 30, '6M': 180}[self._L])).strftime(FORMAT):
+                         (date - relativedelta(days=1)).strftime(FORMAT)]
+                mkt = adj_r2.mean(axis=1)
+                mkt.name = '$RV_{M}$'
+                adj_r2 = pd.melt(adj_r2, var_name='symbol', value_name='RV', ignore_index=False)
+                adj_r2 = adj_r2.join(mkt)
+                adj_r2 = adj_r2.assign(intercept=1.0)
+                adj_r2.index.name = 'timestamp'
+                adj_r2 = adj_r2.reset_index().set_index(['symbol', 'timestamp']).sort_index(
+                    level=['symbol', 'timestamp'])
+                adj_r2_group = adj_r2.groupby(by=[pd.Grouper(level='symbol')])
+                coef = adj_r2_group.apply(lambda x: self.ols_closed_formula(x)).droplevel(axis=0,
+                                                                                          level=-1).reset_index()
+                coef = adj_r2.reset_index(level=0).merge(coef, left_on='symbol', right_on='symbol').filter(regex=f'_y')
+                coef.columns = coef.columns.str.replace('_y', '')
+                coef = coef.assign(symbol=adj_r2.index.get_level_values(0), timestamp=adj_r2.index.get_level_values(1))
+                coef = coef.set_index(['symbol', 'timestamp'])
+                adj_r2.loc[:, 'RV_hat'] = adj_r2.loc[:, coef.columns].mul(coef).sum(axis=1)
+                adj_r2 = adj_r2.filter(regex=f'RV').drop(axis=1, columns='$RV_{M}$')
+                adj_r2 = self._factory_transformation_dd[self._transformation]['transformation'](adj_r2)
+                adj_r2 = adj_r2.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq='D')])
+                adj_r2 = adj_r2.apply(lambda x:
+                                      1 - (1 - r2_score(x.iloc[:, 0], x.iloc[:, -1])) * (x.shape[0] - 1) / (
+                                                  x.shape[0] - 2))
+                tmp.loc[date.strftime(FORMAT)] = adj_r2.groupby(by=[pd.Grouper(level='symbol')]).mean().mean()
+        # for idx, date in enumerate(dates[start_idx:]):
+        #     adj_r2 = self._rv.loc[
+        #              (date - relativedelta(days={'1W': 7, '1M': 30, '6M': 180}[self._L])).strftime(FORMAT):
+        #              (date - relativedelta(days=1)).strftime(FORMAT)]
+        #     mkt = adj_r2.mean(axis=1)
+        #     mkt.name = '$RV_{M}$'
+        #     adj_r2 = pd.melt(adj_r2, var_name='symbol', value_name='RV', ignore_index=False)
+        #     adj_r2 = adj_r2.join(mkt)
+        #     adj_r2 = adj_r2.assign(intercept=1.0)
+        #     adj_r2.index.name = 'timestamp'
+        #     adj_r2 = adj_r2.reset_index().set_index(['symbol', 'timestamp']).sort_index(level=['symbol', 'timestamp'])
+        #     adj_r2_group = adj_r2.groupby(by=[pd.Grouper(level='symbol')])
+        #     coef = adj_r2_group.apply(lambda x: self.ols_closed_formula(x)).droplevel(axis=0, level=-1).reset_index()
+        #     coef = adj_r2.reset_index(level=0).merge(coef, left_on='symbol', right_on='symbol').filter(regex=f'_y')
+        #     coef.columns = coef.columns.str.replace('_y', '')
+        #     coef = coef.assign(symbol=adj_r2.index.get_level_values(0), timestamp=adj_r2.index.get_level_values(1))
+        #     coef = coef.set_index(['symbol', 'timestamp'])
+        #     adj_r2.loc[:, 'RV_hat'] = adj_r2.loc[:, coef.columns].mul(coef).sum(axis=1)
+        #     adj_r2 = adj_r2.filter(regex=f'RV').drop(axis=1, columns='$RV_{M}$')
+        #     adj_r2 = self._factory_transformation_dd[self._transformation]['transformation'](adj_r2)
+        #     adj_r2 = adj_r2.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq='D')])
+        #     adj_r2 = adj_r2.apply(lambda x:
+        #                           1 - (1 - r2_score(x.iloc[:, 0], x.iloc[:, -1])) * (x.shape[0] - 1) / (x.shape[0] - 2))
+        #     tmp.loc[date.strftime(FORMAT)] = adj_r2.groupby(by=[pd.Grouper(level='symbol')]).mean().mean()
         return tmp
 
-    def adj_r2(self) -> None:
+    def adj_r2(self, save: bool = False) -> None:
         adj_r2_dd = dict()
         for L in ['1W', '1M', '6M']:
             if L != self._L:
@@ -283,29 +319,34 @@ class Commonality:
         adj_r2.columns = [f'${L.lower()}$' for L in adj_r2.columns]
         adj_r2 = pd.melt(adj_r2, var_name='$L_{train}$', value_name='adj_r2', ignore_index=False)
         fig = px.line(data_frame=adj_r2, y='adj_r2', color='$L_{train}$',
-                      title='Adjusted $R^2$ for different lookback windows',
+                      title='Commonality (adjusted $R^2$)',
                       category_orders={'$L_{train}$': ['$1w$', '$1m$', '$6m$']})
         fig.update_yaxes(title='Adjusted $R^2$')
         fig.update_xaxes(title='Date', tickangle=45)
-        fig.write_image(os.path.abspath(f'{Commonality._figures_dir}/commonality_adj_r2.pdf'))
+        fig.update_layout(title=dict(font=dict(size=TITLE_FONT_SIZE)),
+                          width=WIDTH, height=HEIGHT, font=dict(size=LABEL_AXIS_FONT_SIZE),
+                          legend=dict(orientation='h', y=.75, x=.75))
+        if save:
+            fig.write_image(os.path.abspath(f'{Commonality._figures_dir}/commonality_adj_r2.pdf'))
+        else:
+            fig.show()
 
     def absorption_ratio_derive(self, all_eigenvectors: bool = True) -> pd.DataFrame:
-        format = '%Y-%m-%d'
         dates = np.unique(self._rv.index.date).tolist()
         start_idx = dates.index(dates[0]+relativedelta(days={'1W': 7, '1M': 30, '6M': 180}[self._L]))
         tmp = pd.Series(index=dates[start_idx:])
         for idx, date in enumerate(dates[start_idx:]):
             cov = \
                 self._rv.loc[
-                (date-relativedelta(days={'1W': 7, '1M': 30, '6M': 180}[self._L])).strftime(format):
-                (date-relativedelta(days=1)).strftime(format)].cov()
+                (date-relativedelta(days={'1W': 7, '1M': 30, '6M': 180}[self._L])).strftime(FORMAT):
+                (date-relativedelta(days=1)).strftime(FORMAT)].cov()
             eigen, rank = np.linalg.eig(cov.values), np.linalg.matrix_rank(cov.values)
             n_eigenvectors = rank if all_eigenvectors else rank//5
             eigenvalues = eigen[0][:n_eigenvectors]
-            tmp.loc[date.strftime(format)] = eigenvalues.sum()/np.diag(cov).sum()
+            tmp.loc[date.strftime(FORMAT)] = eigenvalues.sum()/np.diag(cov).sum()
         return tmp
 
-    def absorption_ratio(self, all_eigenvectors: bool = False) -> None:
+    def absorption_ratio(self, all_eigenvectors: bool = False, save: bool = False) -> None:
         absorption_ratio_dd = dict()
         for L in ['1W', '1M', '6M']:
             if L != self._L:
@@ -321,10 +362,16 @@ class Commonality:
             pd.melt(absorption_ratio, var_name='$L_{train}$', value_name='abs_ratio', ignore_index=False)
         absorption_ratio['$L_{train}$'] = absorption_ratio['$L_{train}$'].str.lower()
         fig = px.line(data_frame=absorption_ratio, y='abs_ratio', color='$L_{train}$',
-                      title='Absorption ratio for different lookback windows')
+                      title='Commonality (absorption ratio)')
         fig.update_yaxes(title='Absorption ratio')
         fig.update_xaxes(title='Date', tickangle=45)
-        fig.write_image(os.path.abspath(f'{Commonality._figures_dir}/commonality_absorption_ratio.pdf'))
+        fig.update_layout(title=dict(font=dict(size=TITLE_FONT_SIZE)),
+                          width=WIDTH, height=HEIGHT, font=dict(size=LABEL_AXIS_FONT_SIZE),
+                          legend=dict(orientation='h', y=1, x=.75))
+        if save:
+            fig.write_image(os.path.abspath(f'{Commonality._figures_dir}/commonality_absorption_ratio.pdf'))
+        else:
+            fig.show()
 
     def commonality(self) -> None:
         if self._type_commonality == 'absorption_ratio':
@@ -426,7 +473,7 @@ def reshape_dataframe(date: datetime, df: pd.DataFrame, model: typing.Union[LSTM
 
 
 def train_model(train: DataLoader, valid: DataLoader, EPOCH: int, model: typing.Union[LSTM_NNModel],
-                init: bool, early_stopping_patience: int = 5, save_loss: bool = False) -> typing.Union[LSTM_NNModel]:
+                early_stopping_patience: int = 5, save_loss: bool = False) -> typing.Union[LSTM_NNModel]:
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=model.lr)
     best_val_loss = np.inf

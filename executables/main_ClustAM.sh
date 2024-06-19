@@ -22,3 +22,7 @@ for l in {1W,1M,6M}
            done
       done
   done
+sqlite3 ../data_centre/databases/y.db < ../sql_scripts/export_table_ClustAM.sql
+zip ../results/y_ClustAM.zip ../results/y_ClustAM.csv
+zip ../results/qlike_ClustAM.zip ../results/qlike_ClustAM.csv
+rm ../results/*.csv

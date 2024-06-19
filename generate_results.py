@@ -3,6 +3,7 @@ import pdb
 from data_centre.data import Reader
 from model.training_schemes import SAM, ClustAM, CAM, UAM
 import argparse
+from pyinstrument import Profiler
 
 training_schemes = [SAM, ClustAM, CAM, UAM]
 training_scheme_factory_dd = {training_scheme.__name__: training_scheme for training_scheme in training_schemes}
@@ -12,7 +13,7 @@ if __name__ == '__main__':
     ####################################################################################################################
     #### Fit models
     ####################################################################################################################
-    data_obj = Reader()
+    data_obj = Reader(5)
     parser = argparse.ArgumentParser(description='Model Lab: Fit and store model results of research project 1.')
     parser.add_argument('--training_scheme', default=False, help='Training scheme under which models are trained.',
                         type=str)
@@ -51,6 +52,8 @@ if __name__ == '__main__':
         vixm = Reader().rv_read(data='vixm')
         extra_args[True].update({'vixm': vixm.iloc[:, :top_book]}) if top_book == 1 else \
             extra_args[True].update({'vixm': vixm})
-    model_builder_obj.add_metrics(regression_type=args.regression_type, df=rv,
-                                  transformation=args.transformation, **extra_args[args.model == 'har_eq'],
-                                  freq=args.freq)
+    with Profiler() as profiler:
+        model_builder_obj.add_metrics(regression_type=args.regression_type, df=rv,
+                                      transformation=args.transformation, **extra_args[args.model == 'har_eq'],
+                                      freq=args.freq)
+    profiler.print()

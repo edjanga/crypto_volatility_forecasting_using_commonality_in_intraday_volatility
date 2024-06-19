@@ -6,8 +6,6 @@ import pandas as pd
 import numpy as np
 from typing import Tuple
 from dateutil.relativedelta import relativedelta
-from model.lab import training_freq
-import plotly.io as pio
 import plotly.express as px
 from plotly.subplots import make_subplots
 from data_centre.data import DBQuery
@@ -115,7 +113,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_moneyness', type=float, help='Maximum moneyness to filter option chain data.',
                         default=1.05)
     parser.add_argument('--h', type=str, help='Time interval.', default='30T')
-    parser.add_argument('--save', type=int, help='Save or show figures.', default=1)
+    parser.add_argument('--save', type=int, help='Save or show figures.', default=0)
     parser.add_argument('--signal_strength', type=float, help='Threshold used to assess how certain signals are.',
                         default=.05)
     args = parser.parse_args()
@@ -134,16 +132,6 @@ if __name__ == '__main__':
     rv_GARCH = dict()
     qlike_GARCH = dict()
     L_train = {'1W': 7, '1M': 30, '6M': 180}
-    # if args.strategy == 'returns':
-    #     trader_obj = Trader(fees=.0004)
-    #     PnL = trader_obj.reader_obj.returns_read(symbol='ETHUSDT').replace(0, np.nan)
-    #     PnL = PnL.fillna(PnL.ewm(span=12, min_periods=1).mean()).resample(args.h).sum()
-    #     ethPnL = pd.DataFrame(index=index)
-    #     ethPnL = ethPnL.resample('1D').sum()
-    #     for key, _ in args._get_kwargs():
-    #         if key not in ['h', 'save', 'signal_strength', 'strategy']:
-    #             delattr(args, key)
-    # else:
     trader_obj = OptionTrader(fees=.0003)
     option_chain_data_obj = OptionChainData()
     files = [file for file in glob.glob('../data_centre/tmp/datasets/*-*-*')]
@@ -153,22 +141,6 @@ if __name__ == '__main__':
     moneyness = data.underlying_price.div(data.strike_price)
     data = data.assign(moneyness=moneyness.values)
     data = data.query(f"moneyness >= {args.min_moneyness} & moneyness <= {args.max_moneyness}")
-    # moneyness = moneyness.groupby(by=[pd.Grouper(level='timestamp')])
-    # moneyness_lower = moneyness.apply(lambda x, y, z: x.quantile(y) - 1.5 * (x.quantile(z) - x.quantile(y)),
-    #                                   y=min_moneyness, z=max_moneyness)
-    # moneyness_lower = moneyness_lower.where(moneyness_lower >= 0, np.nan)
-    # moneyness_lower = moneyness_lower.fillna(moneyness_lower.ewm(span=12, min_periods=1).mean())
-    # moneyness_lower = moneyness_lower.reindex(data.index.get_level_values(1))
-    # moneyness_upper = moneyness.apply(lambda x, y, z: x.quantile(y) + 1.5 * (x.quantile(z) - x.quantile(y)),
-    #                                   y=min_moneyness, z=max_moneyness)
-    # moneyness_upper = moneyness_upper.reindex(data.index.get_level_values(1))
-    # data = data.assign(moneyness_lower=moneyness_lower.values, moneyness_upper=moneyness_upper.values)
-    # data = \
-    #     data.assign(
-    #         moneyness_tag=(data.moneyness >= data.moneyness_lower) & (data.moneyness <= data.moneyness_upper))
-    # data['moneyness_tag'] = data['moneyness_tag'].astype(int)
-    # data = data.query('moneyness_tag == 1').drop(['moneyness_tag', 'moneyness_tag', 'moneyness_lower',
-    #                                               'moneyness_upper'], axis=1)
     data['volume'] = data.volume * data.mark_price * data.underlying_price
     liquidity = data['volume'].quantile(args.liquidity)
     data = data.query(f'volume >= {args.liquidity}')
@@ -197,11 +169,6 @@ if __name__ == '__main__':
           puts_mark_price.filter(regex=f'{"|".join(straddle_ls)}')
     straddles = (~calls_mark_price.filter(regex=f'{"|".join(straddle_ls)}').isnull()) + \
                 (~puts_mark_price.filter(regex=f'{"|".join(straddle_ls)}').isnull())
-    # straddles = (calls_mark_price.filter(regex=f'{"|".join(straddle_ls)}').fillna(0) != 0) + \
-    #             (puts_mark_price.filter(regex=f'{"|".join(straddle_ls)}').fillna(0) != 0)
-    # PnL = np.log(PnL.div(PnL.shift())).replace(0, np.nan).mean(axis=1)
-    # PnL = PnL.fillna(PnL.ewm(min_periods=1, span=12).mean())
-    # PnL = (PnL - np.abs(PnL) * trader_obj.fees)
     rv = trader_obj.reader_obj.rv_read(symbol='ETHUSDT')
     returns = trader_obj.reader_obj.returns_read(symbol='ETHUSDT').replace(0, np.nan)
     returns = returns.fillna(returns.ewm(span=12, min_periods=1).mean())
@@ -257,12 +224,12 @@ if __name__ == '__main__':
                                                                                                            level=2))**.5
     first_valid_date_per_L = signals.apply(lambda x: x.first_valid_index()).droplevel(axis=0, level=0)
     first_valid_date_per_L = first_valid_date_per_L.apply(lambda x: x - relativedelta(days=1))
-    perf_qlike = perf_qlike.reindex(signals.index).ffill()
-    threshold_qlike = \
-        perf_qlike.resample('1M').apply(lambda x: x.quantile(args.signal_strength)).reindex(perf_qlike.index).ffill()
-    threshold_qlike = threshold_qlike.reindex(signals.index).ffill()
-    signals_strength = perf_qlike.lt(threshold_qlike)
-    signals = signals.mul(signals_strength.astype(float).reindex(signals.index).ffill())
+    # perf_qlike = perf_qlike.reindex(signals.index).ffill()
+    # threshold_qlike = \
+    #     perf_qlike.resample('1M').apply(lambda x: x.quantile(args.signal_strength)).reindex(perf_qlike.index).ffill()
+    # threshold_qlike = threshold_qlike.reindex(signals.index).ffill()
+    # signals_strength = perf_qlike.lt(threshold_qlike)
+    # signals = signals.mul(signals_strength.astype(float).reindex(signals.index).ffill())
     signals = signals.diff()
     # Large RV swings
     lower_bound = signals.resample('1D').apply(lambda x: x.quantile(.25)).shift()
@@ -270,8 +237,8 @@ if __name__ == '__main__':
     iqr = upper_bound.sub(lower_bound)
     lower_bound = lower_bound.sub(iqr.mul(1.5)).reindex(signals.index).ffill()
     upper_bound = upper_bound.add(iqr.mul(1.5)).reindex(signals.index).ffill()
-    signals = signals.lt(lower_bound).astype(float)-signals.gt(upper_bound).astype(float)
-    signals = signals.mul(signals_strength)
+    signals = -signals.lt(lower_bound).astype(float)+signals.gt(upper_bound).astype(float)
+    # signals = signals.mul(signals_strength)
     tx_fees = \
         trader_obj.reader_obj.prices_read('ETHUSDT').resample(args.h).last().mul(trader_obj.fees).iloc[:, 0].mul(
             straddles.sum(axis=1))
@@ -294,6 +261,8 @@ if __name__ == '__main__':
     ################################################################################################################
     ### Backtesting
     ################################################################################################################
+    PnL_per_strat = PnL_per_strat.cumsum()
+    # PnL_per_strat = np.log(PnL_per_strat.div(PnL_per_strat.shift())).replace(np.inf, np.nan).ffill()
     sharpeRatio = PnL_per_strat.mean().div(PnL_per_strat.std()).mul(np.sqrt(360)).reset_index().rename(
         columns={'level_0': 'Strategy', 'level_1': r'$L_{train}$', 0: 'Sharpe ratio'})
     sharpeRatio[r'$L_{train}$'] = [f'${L.lower()}$' for L in sharpeRatio[r'$L_{train}$']]
@@ -302,7 +271,9 @@ if __name__ == '__main__':
     print(f'Option universe size: {straddles.shape[1]}.\n')
     print('---------Sharpe ratio table-------------')
     print(sharpeRatio)
-    PnL_per_strat = PnL_per_strat.fillna(0).cumsum()
+    # PnL_per_strat = PnL_per_strat.fillna(0).cumsum()
+    # PnL_per_strat = np.log(PnL_per_strat.div(PnL_per_strat.shift())).fillna(0)
+    # pdb.set_trace()
     print('---------******************-------------\n')
     print('---------P&L per strategy table-------------')
     print(PnL_per_strat)
@@ -318,7 +289,7 @@ if __name__ == '__main__':
     print(PPT_per_strat)
     print('---------*********-------------\n')
     first_valid_date_per_L = first_valid_date_per_L.loc[first_valid_date_per_L.index.duplicated()]
-    PnL_per_strat = PnL_per_strat.ffill()
+    # PnL_per_strat = PnL_per_strat.ffill()
     PnL_per_strat = PnL_per_strat.unstack().reset_index().groupby(
         'level_1').apply(lambda x, y: x.query(f'level_2 >= "{y[x.level_1.unique()[0]]}"'), y=first_valid_date_per_L)
     PnL_per_strat = PnL_per_strat.droplevel(axis=0, level=0).set_index('level_2')
@@ -357,8 +328,10 @@ if __name__ == '__main__':
                  title='Annualized Sharpe ratio', text_auto='.2f',
                  category_orders={r'$L_{train}$': [r'$1w$', r'$1m$', r'$6m$'],
                                   'Strategy': ['GARCH', r'$\mathcal{M}$']})
-    fig.update_layout(width=1_200, height=700, font=dict(size=LEGEND_FONT_SIZE),
+    fig.update_layout(width=1_200, height=700, font=dict(size=LABEL_AXIS_FONT_SIZE),
+                      title=dict(font=dict(size=TITLE_FONT_SIZE)),
                       legend=dict(title=None, orientation='h', xanchor='right', yanchor='bottom', y=1, x=1))
+    fig.update_annotations(font=dict(size=TITLE_FONT_SIZE), x=1)
     ####################################################################################################################
     ## Figure 2: PnL per strat
     ####################################################################################################################
@@ -417,8 +390,8 @@ if __name__ == '__main__':
     fig4.update_xaxes(title_text='Date', tickangle=45, row=1)
     fig4.update_xaxes(title_text='Date', tickangle=45, row=2)
     fig4.update_xaxes(title_text='Date', tickangle=45, row=3)
-    fig4.update_layout(title=dict(text=f'Aggregated QLIKE', font=dict(size=TITLE_FONT_SIZE)), width=1_200, height=1_200,
-                       font=dict(size=LABEL_AXIS_FONT_SIZE))
+    fig4.update_layout(title=dict(text=f'Aggregated QLIKE', font=dict(size=TITLE_FONT_SIZE)),
+                       width=1_200, height=1_200, font=dict(size=LABEL_AXIS_FONT_SIZE))
     fig4.update_annotations(font=dict(size=TITLE_FONT_SIZE), x=1)
     if args.save == 1:
         fig.write_image(os.path.abspath(f'../figures/sharpe_ratio_{args.performance}.pdf'), engine='kaleido')

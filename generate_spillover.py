@@ -15,6 +15,12 @@ import os
 import rpy2.robjects as ro
 
 
+TITLE_FONT_SIZE = 40
+LABEL_AXIS_FONT_SIZE = 20
+LEGEND_FONT_SIZE = 18
+WIDTH = 1_200
+HEIGHT = 1_200
+
 if __name__ == '__main__':
     db_obj = DBQuery()
     spillover_obj = SpilloverEffect()
@@ -122,9 +128,10 @@ if __name__ == '__main__':
                                      color=trace.customdata, colorscale="Viridis",
                                      colorbar=dict(title='Net Transmitter/Receiver', len=0.3, x=-.5)))
     fig.update(layout=dict(showlegend=True, title='Connectedness network: Overview'),
-               annotation=dict(font_size=20))
-    # fig['layout'].update(margin=dict(l=0,r=0,b=0,t=0))
-    # fig.update_annotations(font_size=20)
+               annotation=dict(font_size=TITLE_FONT_SIZE),
+               font=dict(size=LABEL_AXIS_FONT_SIZE))
+    fig.update_layout(title=dict(font=dict(size=TITLE_FONT_SIZE)),
+                      font=dict(size=LABEL_AXIS_FONT_SIZE)) #width=1_200, height=1_200,
     spillover_effect = pd.concat(spillover_effect).reset_index()
     spillover_effect['level_1'] = pd.to_datetime(spillover_effect['level_1'], utc=True)
     spillover_effect = spillover_effect.set_index(['level_0', 'level_1']).groupby(
@@ -135,7 +142,9 @@ if __name__ == '__main__':
     spillover_effect = spillover_effect.rename(columns={'models': '$L_{train}$'})
     fig2 = px.line(spillover_effect, y='Spillover Index', color='$L_{train}$', title='Total Spillover Index')
     fig2.update_xaxes(title_text='Date', tickangle=45)
+    fig2.update_layout(title=dict(font=dict(size=TITLE_FONT_SIZE)),
+                       width=WIDTH, height=HEIGHT, font=dict(size=LABEL_AXIS_FONT_SIZE))
     fig.show()
-    fig.write_image(os.path.abspath(f'./figures/spillover_network.pdf'))
-    fig2.write_image(os.path.abspath(f'./figures/spillover_total_index.pdf'))
-    print(f'[Figures]: Spillover network and total index have been saved.')
+    # fig.write_image(os.path.abspath(f'./figures/spillover_network.pdf'))
+    # fig2.write_image(os.path.abspath(f'./figures/spillover_total_index.pdf'))
+    # print(f'[Figures]: Spillover network and total index have been saved.')

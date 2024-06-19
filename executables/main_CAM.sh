@@ -22,4 +22,7 @@ for l in {1W,1M,6M}
             done
       done
   done
-
+sqlite3 ../data_centre/databases/y.db < ../sql_scripts/export_table_CAM.sql
+zip ../results/y_CAM.zip ../results/y_CAM.csv
+zip ../results/qlike_CAM.zip ../results/qlike_CAM.csv
+rm ../results/*.csv
