@@ -1,7 +1,5 @@
 import pdb
-
 import pandas as pd
-
 from data_centre.data import DBQuery
 import numpy as np
 import plotly.express as px
@@ -25,7 +23,6 @@ if __name__ == '__main__':
     ####################################################################################################################
     qlike = \
         db_obj.query_data(db_obj.best_model_for_all_windows_query(), table='y').sort_values(by='L', ascending=True)
-    # qlike['values'] = qlike['values'].subtract(1)
     qlike.fillna(np.nan, inplace=True)
     qlike.replace(np.nan, '', inplace=True)
     qlike['trading_session'] = qlike['trading_session'].where(qlike['trading_session'] != '1', 'EQ')
@@ -38,15 +35,7 @@ if __name__ == '__main__':
          'pcr': 'PCR'}
     for regression, target in regression_conversion.items():
         qlike['regression'] = qlike['regression'].str.replace(regression, target)
-    # qlike['tag'] = \
-    #     [
-    #         f'${row["model"]}_{{{row["trading_session"]}}}^' \
-    #         f'{{{row["training_scheme"], row["L"], row["regression"], row["top_book"]}}}: '
-    #         f'{round(row["values"], 4)}$}}}}'
-    #         for idx, row in qlike[['values', 'training_scheme', 'L', 'model', 'regression', 'trading_session',
-    #                                'top_book']].iterrows()
-    #     ]
-    for i in range(1, 4):
+    for i in range(1, 3):
         tmp = qlike.copy()
         tmp['values'] = 0
         tmp['training_scheme'] = f'ghost{i}'
@@ -62,15 +51,17 @@ if __name__ == '__main__':
                                    'top_book']].iterrows()
         ]
     fig = px.bar(data_frame=qlike[['values', 'model', 'model_values']], x='values', y='model', orientation='h',
-                 barmode='group', color='model_values', text='model_values')
-    pdb.set_trace()
+                 barmode='group', color='model_values',
+                 color_discrete_sequence=px.colors.qualitative.Plotly[3:6] + px.colors.qualitative.Plotly[:3] +
+                                         px.colors.qualitative.Plotly[6:10])
+    fig.data = [plot.update({'showlegend': False}) if 'ghost' in plot.name else plot for plot in fig.data]
     fig.data = list(map(lambda x: x.update({'y': ['']}), fig.data))
     fig.update_xaxes(title=dict(text='QLIKE'))
-    fig.update_xaxes(title=dict(text=''))
+    fig.update_yaxes(title=dict(text=''))
     fig.update_layout(width=1_000, height=600, font=dict(size=LABEL_AXIS_FONT_SIZE),
                       title=dict(font=dict(size=TITLE_FONT_SIZE)),
-                      xaxis_title_font=dict(size=LABEL_AXIS_FONT_SIZE), showlegend=False)
+                      xaxis_title_font=dict(size=LABEL_AXIS_FONT_SIZE),
+                      legend=dict(y=.05, x=1.1, title=None))
     fig.update_layout(yaxis=dict(domain=[.0, .25]))
     fig.show()
-    qlike = qlike[['L', 'model']]
-    print(qlike.set_index('L').transpose().to_latex())
+    pdb.set_trace()
