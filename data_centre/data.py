@@ -15,6 +15,7 @@ from tardis_dev import datasets
 from dotenv import load_dotenv
 import argparse
 from dateutil.relativedelta import relativedelta
+import plotly.express as px
 load_dotenv()
 API_KEY = os.getenv('API_KEY')
 
@@ -263,6 +264,7 @@ class DBQuery:
     _list_regressions = ['linear', 'lasso', 'ridge', 'elastic', 'lightgbm', 'var', 'lstm']
     _list_training_schemes = ['SAM', 'ClustAM', 'CAM', 'UAM']
     _list_Ls = ['1W', '1M', '6M']
+    _list_vol_regimes = ['low', 'normal', 'high']
     _list_metrics = ['r2', 'mse', 'qlike']
     _db_connect_y = \
         sqlite3.connect(database=os.path.abspath(f'{data_centre_dir_dbs}/y.db'), check_same_thread=False)
@@ -270,6 +272,9 @@ class DBQuery:
                                               check_same_thread=False) for metric in _list_metrics}
     _db_connect_dd.update({'y': _db_connect_y})
     _fct = {False: 'MAX', True: 'MIN'}
+    _reader = Reader()
+    _vol_regime = _reader.rv_read().resample('D').sum().mean(axis=1)
+    _vol_regime.name = 'vol_regime'
 
     def __init__(self):
         pass
@@ -282,13 +287,15 @@ class DBQuery:
         return query
 
     @staticmethod
-    def forecast_query(L: str, model: str, regression: str, training_scheme: str,
+    def forecast_query(L: str, model: str, regression: str, training_scheme: str, symbol: str = None,
                        trading_session: int = None, top_book: int = None) -> pd.DataFrame:
         query = f'SELECT "y_hat", "L", "vol_regime", "model", "regression", "trading_session", "top_book"'\
-                f',"timestamp","symbol" ' \
+                f',"timestamp", "symbol" ' \
                 f'FROM y_{L} ' \
                 f'WHERE "L"=\"{L}\" AND "regression"=\"{regression}\" AND "training_scheme"=\"{training_scheme}\"'
-        if model:
+        if isinstance(symbol, str):
+            query = ' AND '.join((query, f'"symbol"=\"{symbol}\"'))
+        if isinstance(model, str):
             query = ' AND '.join((query, f'"model"=\"{model}\"'))
         if isinstance(trading_session, int) & (model == 'har_eq'):
             query = ' AND '.join((query, f'"trading_session"={trading_session}'))
@@ -298,13 +305,16 @@ class DBQuery:
         return pd.read_sql(sql=query, con=DBQuery._db_connect_y, index_col='timestamp')
 
     @staticmethod
-    def forecast_performance(L: str, model: str, regression: str, training_scheme: str, trading_session: int = None,
-                             top_book: int = None, metric: str='qlike') -> pd.DataFrame:
+    def forecast_performance(L: str, model: str, regression: str, training_scheme: str, symbol: str = None,
+                             trading_session: int = None, top_book: int = None, metric: str='qlike') -> pd.DataFrame:
         query = f'SELECT "values", "L", "model", "regression", "trading_session", "top_book"' \
                 f',"timestamp","symbol" FROM "{metric}_{L}\" ' \
                 f'WHERE "L"=\"{L}\" AND "regression"=\"{regression}\" AND "training_scheme"=\"{training_scheme}\"'
-        if model:
+        if isinstance(model, str):
             query = ' AND '.join((query, f'"model"=\"{model}\"'))
+        if isinstance(symbol, str):
+            query = ' AND '.join((query, f'"symbol"=\"{symbol}\"'))
+        pdb.set_trace()
         if ~np.isnan(trading_session):
             query = ' AND '.join((query, f'"trading_session"=\"{trading_session}\"'))
         if ~np.isnan(top_book):
@@ -314,25 +324,176 @@ class DBQuery:
         query.index = pd.to_datetime(query.index)
         return query
 
+    # @staticmethod
+    # def best_model_for_all_windows_query(metric: str) -> str:
+    #     query = list()
+    #     for idx, L in enumerate(DBQuery._list_Ls):
+    #         # tmp_query = f'SELECT MIN("values")  AS  "values",  "model", "regression","training_scheme",' \
+    #         #             f'"trading_session","top_book","L","h"' \
+    #         #             f'FROM (SELECT AVG("values")  AS "values",  "model", "regression","training_scheme",' \
+    #         #             f'"trading_session","top_book","L","h" FROM (SELECT "values","metric","model","L",' \
+    #         #             f'"training_scheme","regression","trading_session","top_book","h" ' \
+    #         #             f'FROM {metric}_{L}) GROUP BY "symbol","regression","model")'
+    #         tmp_query = f'SELECT MIN ("values")-1 AS "values", "model", "regression","training_scheme",' \
+    #                     f'"trading_session","top_book","L","h"' \
+    #                     f'FROM' \
+    #                     f'(SELECT AVG("values") AS "values", "model", "regression","training_scheme", ' \
+    #                     f'"trading_session","top_book","L","h"' \
+    #                     f'FROM ' \
+    #                     f'(SELECT "values","model","L","training_scheme","regression","trading_session","top_book","h" ' \
+    #                     f'FROM {metric}_{L}) GROUP BY "training_scheme","regression","model","L","h")'
+    #         if idx == len(DBQuery._list_Ls)-1:
+    #             tmp_query = ';'.join((tmp_query, ''))
+    #         query.append(tmp_query)
+    #     query = ' UNION ALL '.join(query)
+    #     return query
+
     @staticmethod
-    def best_model_for_all_windows_query(metric: str) -> str:
+    def best_model_for_all_windows_query() -> str:
         query = list()
         for idx, L in enumerate(DBQuery._list_Ls):
-            tmp_query = f'SELECT MIN("values")  AS  "values",  "model", "regression","training_scheme",' \
-                        f'"trading_session","top_book","L","h"' \
-                        f'FROM (SELECT AVG("values")  AS "values",  "model", "regression","training_scheme",' \
-                        f'"trading_session","top_book","L","h" FROM (SELECT "values","metric","model","L",' \
-                        f'"training_scheme","regression","trading_session","top_book","h" ' \
-                        f'FROM {metric}_{L}) GROUP BY "symbol","regression","model")'
-            if idx == len(DBQuery._list_Ls)-1:
+            # tmp_query = f'SELECT MIN("values") AS "values","model", "regression", "training_scheme",' \
+            #             f'"trading_session","top_book", "L", "h" ' \
+            #             f'FROM (SELECT AVG("values") AS "values", "model", "regression","training_scheme",' \
+            #             f'"trading_session","top_book", "L", "h" ' \
+            #             f'FROM (SELECT ("y"/"y_hat") - LN("y"/"y_hat") - 1 AS "values", "y", "y_hat", "model","L",' \
+            #             f'"training_scheme","regression","trading_session","top_book", "h" FROM y_{L})' \
+            #             f'GROUP BY "training_scheme","model","regression","trading_session","top_book", "L")'
+            # tmp_query = f'SELECT MIN("values") AS "values", "model", "regression", "training_scheme",' \
+            #             f'"trading_session", "top_book", "L", "h"' \
+            #             f'FROM ' \
+            #             f'(SELECT AVG("values") AS "values", "model", "regression", "training_scheme",' \
+            #             f'"trading_session", "top_book", "L", "h"' \
+            #             f'FROM' \
+            #             f'(SELECT strftime("%Y-%m-%d %H:", "timestamp") || CASE WHEN ' \
+            #             f'cast(strftime("%M", "timestamp") as integer) < 30 THEN "00" ELSE "30" END as timestamp,' \
+            #             f'AVG("values") AS "values", "symbol", "training_scheme", "regression", "model",' \
+            #             f'"trading_session", "top_book", "L", "h"' \
+            #             f'FROM' \
+            #             f'(SELECT EXP("y" / "y_hat") - ("y" / "y_hat") - 1 AS "values", "y", "y_hat", "model", "L",' \
+            #             f'"training_scheme", "regression", "trading_session", "top_book", "h", "symbol", "timestamp"' \
+            #             f'FROM y_{L})' \
+            #             f'GROUP BY "symbol", "training_scheme", "regression", "model", "trading_session", "top_book",' \
+            #             f'"timestamp")' \
+            #             f'GROUP BY "training_scheme", "regression", "model", "trading_session", "top_book")'
+            tmp_query = f'SELECT MIN("values") AS "values", "model", "regression","training_scheme",' \
+                        f'"trading_session","top_book", "L", "h"' \
+                        f'FROM ' \
+                        f'(SELECT AVG("values") AS "values", "model", "regression","training_scheme",' \
+                        f'"trading_session","top_book", "L", "h"' \
+                        f'FROM ' \
+                        f'(SELECT EXP("y"/"y_hat") - ("y"/"y_hat") - 1 AS "values", "model","L", "training_scheme",' \
+                        f'"regression","trading_session","top_book", "h", "symbol" ,"timestamp"' \
+                        f'FROM ' \
+                        f'(SELECT strftime("%Y-%m-%d %H:", "timestamp") || CASE WHEN cast(strftime("%M", "timestamp")' \
+                        f' as integer) < 30 THEN "00" ELSE "30" END as timestamp,' \
+                        f' SUM("y") AS "y", SUM("y_hat") AS "y_hat","symbol","training_scheme", "regression",' \
+                        f'"model","trading_session","top_book", "L", "h"' \
+                        f'FROM ' \
+                        f'(SELECT "y", "y_hat", "model","L","training_scheme","regression","trading_session",' \
+                        f'"top_book", "h", "symbol" ,"timestamp" FROM y_{L}) ' \
+                        f'GROUP BY "symbol", "training_scheme", "regression",  "model", "trading_session",' \
+                        f'"top_book", "timestamp")) ' \
+                        f'GROUP BY "training_scheme", "regression",  "model", "trading_session", "top_book")'
+            if idx == len(DBQuery._list_Ls) - 1:
                 tmp_query = ';'.join((tmp_query, ''))
             query.append(tmp_query)
         query = ' UNION ALL '.join(query)
         return query
 
     @staticmethod
+    def best_model_for_all_market_regimes(latex: bool = True) -> pd.DataFrame:
+        query = list()
+        tmp_table = list()
+        for idx, L in enumerate(DBQuery._list_Ls):
+            tmp_query = f'SELECT "timestamp", AVG("values")  AS "values",  "model", "regression","training_scheme",' \
+                        f'"trading_session","top_book","L","h" ' \
+                        f'FROM (SELECT "values","metric","model","L", "training_scheme","regression",' \
+                        f'"trading_session","top_book","h","timestamp" FROM qlike_{L}) ' \
+                        f'GROUP BY  "timestamp", "training_scheme","model", "regression","trading_session","top_book"'
+            query.append(tmp_query)
+        query = ';'.join((' UNION ALL '.join(query), ''))
+        chunks = pd.read_sql(sql=query, con=DBQuery._db_connect_dd['qlike'], chunksize=10_000)
+        while True:
+            try:
+                chunk = next(chunks)
+                tmp_table.append(chunk)
+            except StopIteration:
+                break
+        table = pd.concat(tmp_table)
+        table['timestamp'] = pd.to_datetime(table['timestamp'], utc=True)
+        table = \
+            table.assign(tag=table[['training_scheme', 'L', 'model', 'regression', 'trading_session',
+                                    'top_book']].apply(tuple, axis=1))
+        table.drop(['model', 'regression', 'training_scheme', 'trading_session', 'top_book', 'L', 'h'], axis=1,
+                   inplace=True)
+        table = table.groupby(by=[pd.Grouper(key='tag'), pd.Grouper(key='timestamp', freq='D')]).mean()
+        DBQuery._vol_regime.index.name = table.index.names[-1]
+        vol_regime = pd.cut(DBQuery._vol_regime, bins=[0, DBQuery._vol_regime.quantile(.45),
+                                                       DBQuery._vol_regime.quantile(.9),
+                                                       DBQuery._vol_regime.quantile(1)],
+                            labels=['low', 'normal', 'high'])
+        table = table.join(vol_regime, how='left')
+        table = \
+            table.groupby(by=[pd.Grouper(key='vol_regime'),
+                              pd.Grouper(level='tag')]).apply(lambda x: x['values'].mean()).reset_index(0)
+        table = \
+            table.groupby(by=[pd.Grouper(key='vol_regime')]).apply(lambda x: (x[[0]].idxmin(), x[[0]].min()))
+        table = pd.DataFrame(table)
+        table.reset_index(inplace=True)
+        table = table.assign(tag=table[0].apply(lambda x: x[0]), values=table[0].apply(lambda x: x[1]))
+        table.drop(0, axis=1, inplace=True)
+        table['values'] = table['values'].subtract(1)
+        table = table.assign(training_scheme=table['tag'].apply(lambda x: x[0]), L=table['tag'].apply(lambda x: x[1]),
+                             model=table['tag'].apply(lambda x: x[2]), regression=table['tag'].apply(lambda x: x[3]),
+                             trading_session=table['tag'].apply(lambda x: x[-2]),
+                             top_book=table['tag'].apply(lambda x: x[-1]))
+        table.drop('tag', axis=1, inplace=True)
+        if latex:
+            ##########################################################################################################
+            ## Formatting
+            ##########################################################################################################
+            table.fillna(np.nan, inplace=True)
+            table.replace(np.nan, '', inplace=True)
+            table['trading_session'] = table['trading_session'].where(table['trading_session'] != '1', 'EQ')
+            table['model'] = table['model'].str.replace('_eq', '')
+            table['model'] = table['model'].str.upper()
+            table['L'] = table['L'].str.lower()
+            regression_conversion = \
+                {'lightgbm': r'\text{LightGBM}', 'lasso': r'\text{LASSO}', 'elastic': r'\text{ELASTIC}',
+                 'ridge': r'\text{RIDGE}', 'linear': r'\text{LR}', 'lstm': r'\text{LSTM}', 'var': r'\text{VAR}',
+                 'pcr': r'\text{PCR}'}
+            for regression, target in regression_conversion.items():
+                table['regression'] = table['regression'].str.replace(regression, target)
+            plotly_default_colors_int = list(px.colors.DEFAULT_PLOTLY_COLORS)
+            plotly_default_colors_int = \
+                [list(map(lambda x: int(x),
+                          colors.replace('rgb', '').replace('(', '').replace(')', '').replace(' ', '').split(',')))
+                 for colors in plotly_default_colors_int]
+            table['tag'] = \
+                [
+                    f'\colorbox{{rgb:red!10,{plotly_default_colors_int[idx][0]};'
+                    f'green!10,{plotly_default_colors_int[idx][2]};'
+                    f'blue!10,{plotly_default_colors_int[idx][1]}}}{{${row["model"]}_'
+                    f'{{{row["trading_session"]}}}^' \
+                    f'{{{row["training_scheme"],row["L"],row["regression"],row["top_book"]}}}: '
+                    f'{round(row["values"],4)}$}}}}'
+                    for idx, row in table[['values', 'training_scheme', 'L', 'model', 'regression', 'trading_session',
+                                           'top_book']].iterrows()
+                ]
+            table = table[['vol_regime', 'tag']].set_index('vol_regime').transpose()[['low', 'normal', 'high']]
+            print(table.to_latex())
+
+    @staticmethod
     def query_data(query: str, table: str) -> pd.DataFrame:
-        return pd.read_sql(sql=query, con=DBQuery._db_connect_dd[table]).fillna(np.nan)
+        chunk_ls = list()
+        chunk = pd.read_sql(sql=query, con=DBQuery._db_connect_dd[table], chunksize=10_000)
+        for _, tmp in enumerate(chunk):
+            chunk_ls.append(tmp)
+        chunk = pd.concat(chunk_ls)
+        if 'timestamp' in chunk.columns:
+            chunk.index = pd.to_datetime(chunk.index, utc=True)
+        return pd.concat(chunk_ls)
 
 
 if __name__ == '__main__':

@@ -15,18 +15,17 @@ from model.feature_engineering_room import FeatureAR, FeatureHAR, FeatureRiskMet
 import numpy as np
 import optuna
 from model.lab import training_freq, train_model, split_train_valid_set, lags, scaling, inverse_scaling,\
-    LSTM_NNModel, qlike_score, reshape_dataframe#, VAR_Model
+    LSTM_NNModel, qlike_score, reshape_dataframe, VAR_Model
 import torch
 from torch.utils.data import DataLoader
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
 from sklearn.decomposition import PCA
-from sklearn.metrics import r2_score, mean_squared_error
+from sklearn.metrics import mean_squared_error
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.pipeline import Pipeline
 from optuna.samplers import RandomSampler
 from functools import partial
-import pytz
 from data_centre.data import Reader
 DEVICE = 'cpu'
 if torch.cuda.is_available():
@@ -39,7 +38,7 @@ STOPPING_ROUNDS = 3
 MAX_ITER = 10
 N_TRIALS = 3
 N_JOBS = 1
-EPOCH = 100
+EPOCH = 300
 EARLY_STOPPING_PATIENCE = 5
 
 
@@ -194,13 +193,6 @@ class TrainingScheme(object):
         regression_type = trial.study.study_name.split('_')[3]
         if regression_type == 'lightgbm':
             date = trial.study.study_name.split('_')[-1]
-            date_prev = datetime.strptime(trial.study.study_name.split('_')[-1], '%Y-%m-%d') - relativedelta(days=idx)
-            date_prev = date_prev.strftime('%Y-%m-%d')
-            tmp_model_dir = '../model/tmp'
-            tmp_model_path = '/'.join((tmp_model_dir, trial.study.study_name))
-            prev_tmp_model_path = '/'.join((tmp_model_dir, trial.study.study_name.replace(date, date_prev)))
-            if not os.path.exists(os.path.relpath(start='.', path=tmp_model_dir)):
-                os.makedirs(tmp_model_dir)
             train_loader, valid_loader = lgb.Dataset(X_train, label=y_train), lgb.Dataset(X_valid, label=y_valid)
             param = {
                 'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
@@ -213,9 +205,7 @@ class TrainingScheme(object):
             tmp_rres = lgb.train(param, train_set=train_loader, valid_sets=[valid_loader],
                                  num_boost_round=NUM_BOOST_ROUND,
                                  callbacks=[lgb.early_stopping(STOPPING_ROUNDS,
-                                                               first_metric_only=True, verbose=True, min_delta=0.0)],
-                                 init_model={True: os.path.relpath(start='.', path=prev_tmp_model_path),
-                                             False: None}[init])
+                                                               first_metric_only=True, verbose=True, min_delta=0.0)])
         elif regression_type == 'lasso':
             param = {'objective': 'regression', 'metric': 'mse', 'verbosity': -1,
                      'alpha': trial.suggest_float('alpha', 1e-4, 1e-1, log=False)
@@ -236,9 +226,6 @@ class TrainingScheme(object):
             tmp_rres.fit(X_train.values, y_train)
         loss = mean_squared_error(y_valid, tmp_rres.predict(X_valid))
         trial.set_user_attr(key='best_estimator', value=tmp_rres)
-        if regression_type == 'lightgbm':
-            if not init:
-                trial.user_attrs['best_estimator'].save_model(tmp_model_path)
         return loss
 
     @staticmethod
@@ -247,78 +234,58 @@ class TrainingScheme(object):
             study.set_user_attr(key='best_estimator', value=trial.user_attrs['best_estimator'])
 
     def rolling_metrics_per_date(self, date: datetime, symbol: str, regression_type: str,
-                                 exog: pd.DataFrame, endog: pd.DataFrame, transformation: str, idx: int = 0,
+                                 exog: pd.DataFrame, endog: pd.DataFrame, transformation: str,
                                  **kwargs) -> Union[pd.Series, Tuple[datetime, object]]:
         if self._model_type == 'risk_metrics':
             model_obj = self._factory_model_type_dd[self._model_type]
             print(f'[End of Training]: '
                   f'Training on {self.__class__.__name__}_{self._L}_{transformation}_{regression_type}_'
-                  f'{self._model_type}_{symbol}_{(date+relativedelta(days=idx)).strftime("%Y-%m-%d")} '
+                  f'{self._model_type}_{symbol}_{date.strftime("%Y-%m-%d")} '
                   f'has been completed.')
-            yt_hat = model_obj.predict(y=endog.loc[((date+relativedelta(days=idx)) - relativedelta(
-                days={'1W': 7, '1M': 30, '6M': 180}[self._L])).strftime('%Y-%m-%d'):
-                                                   (date+relativedelta(days=idx)).strftime('%Y-%m-%d')],
-                                       date=(date+relativedelta(days=idx)))
+            yt_hat = model_obj.predict(y=endog.loc[(date - relativedelta(
+                days={'1W': 7, '1M': 30, '6M': 180}[self._L])).strftime('%Y-%m-%d'): date.strftime('%Y-%m-%d')],
+                                       date=date)
             return yt_hat
         else:
-            train_index = list(set(exog.index[(exog.index.date >= date + relativedelta(days=idx) - L_train) &
-                                              (exog.index.date < date + relativedelta(days=idx))]))
+            train_index = list(set(exog.index[(exog.index.date >= date - L_train) &
+                                              (exog.index.date < date)]))
             train_index.sort()
-            test_index = list(set(exog.index[exog.index.date == date + relativedelta(days=idx)]))
+            test_index = list(set(exog.index[exog.index.date == date]))
             test_index.sort()
             valid_index = train_index[-len(train_index) // 5:]
             train_index = train_index[:-len(train_index) // 5]
             X_valid, y_valid = exog.loc[exog.index.isin(valid_index), :], endog.loc[endog.index.isin(valid_index)]
             X_train, y_train = exog.loc[exog.index.isin(train_index), :], endog.loc[endog.index.isin(train_index)]
             if regression_type not in ['linear', 'pcr']:
-                if (len(kwargs) > 0)&(self._model_type == 'har_eq'):
+                if (len(kwargs) > 0) & (self._model_type == 'har_eq'):
                     if isinstance(kwargs.get('top_book'), int):
                         study_name = f'{self.__class__.__name__}_{self._L}_{transformation}_{regression_type}_' \
                                      f'{self._model_type}_top_book_{kwargs.get("top_book")}_' \
-                                     f'{symbol}_{(date+relativedelta(days=idx)).strftime("%Y-%m-%d")}'
+                                     f'{symbol}_{date.strftime("%Y-%m-%d")}'
                     else:
                         study_name = f'{self.__class__.__name__}_{self._L}_{transformation}_{regression_type}_' \
                                      f'{self._model_type}_trading_session{kwargs.get("trading_session")}_' \
-                                     f'{symbol}_{(date+relativedelta(days=idx)).strftime("%Y-%m-%d")}'
+                                     f'{symbol}_{date.strftime("%Y-%m-%d")}'
                 else:
                     study_name = f'{self.__class__.__name__}_{self._L}_{transformation}_{regression_type}_' \
-                                 f'{self._model_type}_{symbol}_{(date+relativedelta(days=idx)).strftime("%Y-%m-%d")}'
+                                 f'{self._model_type}_{symbol}_{date.strftime("%Y-%m-%d")}'
                 study = optuna.create_study(direction='minimize', study_name=study_name, sampler=RandomSampler(123))
-                objective = partial(self.objective, X_train=X_train, X_valid=X_valid, y_train=y_train, y_valid=y_valid,
-                                    init=not (idx == 0), idx=idx)
+                objective = partial(self.objective, X_train=X_train, X_valid=X_valid, y_train=y_train, y_valid=y_valid)
                 study.optimize(objective, n_trials={True: N_TRIALS, False: 1}[training_freq(date, self._L)],
                                callbacks=[self.callback], n_jobs=N_JOBS)
                 rres = study.user_attrs['best_estimator']
                 return date, rres
             else:
-                tmp_model_dir = '../model/tmp'
                 rres = LinearRegression()
                 if regression_type == 'pcr':
                     rres_pca = PCA()
                     X_train = X_train.replace(np.inf, np.nan)
                     X_train = X_train.fillna(X_train.ewm(span=12, min_periods=1).mean())
-                    if idx == 0:
-                        tmp_model_path = '_'.join((self.__class__.__name__, self._L, str(transformation),
-                                                   regression_type, self._model_type, symbol,
-                                                   date.strftime('%Y-%m-%d')))
-                        tmp_model_path = os.path.relpath(start='.', path='/'.join((tmp_model_dir, tmp_model_path)))
-                        rres_pca.fit(X_train.values)
-                        explained_variance_ratio = list(np.cumsum(rres_pca.explained_variance_ratio_) >= .9)
-                        n_components = explained_variance_ratio.index(True) + 1
-                        rres_pca = PCA(n_components)
-                        rres_pca.fit(X_train.values)
-                        if not os.path.exists(os.path.relpath(start='.', path=tmp_model_dir)):
-                            os.makedirs(tmp_model_dir)
-                        with open(tmp_model_path, 'wb') as f:
-                            pickle.dump(rres_pca, f)
-                    else:
-                        prev_tmp_model_path = '_'.join((self.__class__.__name__, self._L, str(transformation),
-                                                        regression_type, self._model_type, symbol,
-                                                        date.strftime('%Y-%m-%d')))
-                        prev_tmp_model_path = os.path.relpath(start='.',
-                                                              path='/'.join((tmp_model_dir, prev_tmp_model_path)))
-                        with open(prev_tmp_model_path, 'rb') as f:
-                            rres_pca = pickle.load(f)
+                    rres_pca.fit(X_train.values)
+                    explained_variance_ratio = list(np.cumsum(rres_pca.explained_variance_ratio_) >= .9)
+                    n_components = explained_variance_ratio.index(True) + 1
+                    rres_pca = PCA(n_components)
+                    rres_pca.fit(X_train.values)
                     own_train, own_test = pd.DataFrame(), pd.DataFrame()
                     """If cluster group contains only more than one member"""
                     if kwargs.get('cluster'):
@@ -331,12 +298,7 @@ class TrainingScheme(object):
                 pipeline = Pipeline([('pca', rres_pca), ('linear', rres)]) if regression_type == 'pcr' else rres
                 end_tag = {True: 'training', False: 'fine tuning'}
                 print(f'[End of Training]: Training on {self.__class__.__name__}_{self._L}_{transformation}_'
-                      f'{regression_type}_{self._model_type}_{symbol}_{date.strftime("%Y-%m-%d")} has been completed.')\
-                    if idx == 0 else \
-                    print(f'[End of {end_tag[regression_type=="linear"]}]: {end_tag[regression_type=="linear"].title()}'
-                          f' on {self.__class__.__name__}_{self._L}_{transformation}_{regression_type}_'
-                          f'{self._model_type}_{symbol}_{(date+relativedelta(days=idx)).strftime("%Y-%m-%d")} '
-                          f'has been completed.')
+                      f'{regression_type}_{self._model_type}_{symbol}_{date.strftime("%Y-%m-%d")} has been completed.')
                 return date, pipeline
 
     def rolling_metrics(self, exog: pd.DataFrame, transformation: str, regression_type: str = 'linear',
@@ -363,50 +325,23 @@ class TrainingScheme(object):
         tmp_dd = dict()
         kwargs_copy = kwargs.copy()
         del kwargs_copy['symbol']
-        for date in dates[dates.index(start)::L_train.days]:
-            if self._model_type == 'risk_metrics':
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    futures = [executor.submit(self.rolling_metrics_per_date, date, symbol, regression_type,
-                                               exog, endog, transformation, idx, **kwargs_copy)
-                               for idx in range(0, min(L_train.days,
-                                                       (dates[-1]-(date + relativedelta(days=idx))).days))]
-                    for future in concurrent.futures.as_completed(futures):
-                        yt = future.result()
-                        y.append(yt)
-            else:
-                date_model, model = self.rolling_metrics_per_date(exog=exog, endog=endog, date=date,
-                                                                  regression_type=regression_type,
-                                                                  transformation=transformation,
-                                                                  symbol=symbol, idx=0, **kwargs_copy)
-                tmp_dd[date_model] = model
-                L_train_limit = (dates[-1]-date).days
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    futures = \
-                        [executor.submit(self.rolling_metrics_per_date, date, symbol, regression_type, exog, endog,
-                                         transformation, idx, **kwargs_copy)
-                         for idx in range(1, min(L_train_limit, L_train.days)+1)]
-                    for idx, future in enumerate(concurrent.futures.as_completed(futures)):
-                        date, model = future.result()
-                        tmp_dd[date+relativedelta(days=idx+1)] = model
-                if regression_type in ['lightgbm', 'pcr']:
-                    if (len(kwargs) > 0) & (self._model_type == 'har_eq'):
-                        if isinstance(kwargs.get('top_book'), int):
-                            tmp_model_path = '_'.join((self.__class__.__name__, self._L, str(transformation),
-                                                       regression_type, self._model_type,
-                                                       f'top_book_{kwargs.get("top_book")}', symbol,
-                                                       f'{date.strftime("%Y-%m-%d")}'))
-                        else:
-                            tmp_model_path = '_'.join((self.__class__.__name__, self._L, str(transformation),
-                                                       regression_type, self._model_type,
-                                                       f'trading_session_{kwargs.get("trading_session")}', symbol,
-                                                       f'{date.strftime("%Y-%m-%d")}'))
-                    else:
-                        tmp_model_path = '_'.join((self.__class__.__name__, self._L, str(transformation),
-                                                   regression_type, self._model_type, symbol,
-                                                   date_model.strftime('%Y-%m-%d')))
-                    tmp_model_dir = '../model/tmp'
-                    tmp_model_path = '/'.join((tmp_model_dir, tmp_model_path))
-                    os.remove(os.path.relpath(start='.', path=tmp_model_path))
+        if self._model_type == 'risk_metrics':
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = [executor.submit(self.rolling_metrics_per_date, date, symbol, regression_type,
+                                           exog, endog, transformation, **kwargs_copy)
+                           for date in dates[dates.index(start):]]
+                for future in concurrent.futures.as_completed(futures):
+                    yt = future.result()
+                    y.append(yt)
+        else:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = \
+                    [executor.submit(self.rolling_metrics_per_date, date, symbol, regression_type, exog, endog,
+                                     transformation, **kwargs_copy)
+                     for date in dates[dates.index(start):]]
+                for future in concurrent.futures.as_completed(futures):
+                    date, model = future.result()
+                    tmp_dd[date] = model
         model_s = pd.Series(tmp_dd).sort_index()
         if self._model_type != 'risk_metrics':
             with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -602,13 +537,14 @@ class ClustAM(TrainingScheme):
                                                                                  **kwargs)
         if ClustAM._cluster_group is None:
             ClustAM.build_clusters(df.loc[:, self._universe])
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = \
-                [executor.submit(lambda x: self.cluster_members(x), x=symbol) for symbol in df.columns]
-            for future in concurrent.futures.as_completed(futures):
-                symbol, member_ls = future.result()
-                self.add_metrics_per_symbol(symbol=symbol, df=df[member_ls], regression_type=regression_type,
-                                            transformation=transformation, cluster=member_ls, **kwargs)
+        for idx in range(0, 20, 5):
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = \
+                    [executor.submit(lambda x: self.cluster_members(x), x=symbol) for symbol in df.columns[idx:idx+5]]
+                for future in concurrent.futures.as_completed(futures):
+                    symbol, member_ls = future.result()
+                    self.add_metrics_per_symbol(symbol=symbol, df=df[member_ls], regression_type=regression_type,
+                                                transformation=transformation, cluster=member_ls, **kwargs)
 
     @property
     def clusters_trained(self):
@@ -641,13 +577,11 @@ class CAM(TrainingScheme):
         if (self._model_type == 'har_eq') & (kwargs.get('trading_session') == 0):
             self._universe = self._universe+kwargs['vixm'].columns.tolist()
             df = self.build_exog(df, transformation, **kwargs)
-        for symbol in df.columns:
-            self.add_metrics_per_symbol(symbol=symbol, transformation=transformation, regression_type=regression_type,
-                                        df=df, **kwargs)
-        # with concurrent.futures.ThreadPoolExecutor() as executor:
-        #     futures = [executor.submit(self.add_metrics_per_symbol, symbol=symbol, transformation=transformation,
-        #                                regression_type=regression_type, df=df, **kwargs)
-        #                for symbol in df.columns]
+        for idx in range(0, 20, 5):
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = [executor.submit(self.add_metrics_per_symbol, symbol=symbol, transformation=transformation,
+                                           regression_type=regression_type, df=df, **kwargs)
+                           for symbol in df.columns[idx:idx+5]]
 
     @property
     def feature_importance(self):
@@ -700,19 +634,11 @@ class UAM(TrainingScheme):
     def regression_type(self, regression_type: str) -> None:
         self._regression_type = regression_type
 
-    def objective(self, trial: optuna.trial.Trial, train: pd.DataFrame, valid: pd.DataFrame, init: bool,
-                  idx: int) -> float:
+    def objective(self, trial: optuna.trial.Trial, train: pd.DataFrame, valid: pd.DataFrame) -> float:
         if self._regression_type == 'lightgbm':
             y_train = train.copy().pop('RV')
             y_valid = valid.copy().pop('RV')
             date = trial.study.study_name.split('_')[-1]
-            date_prev = datetime.strptime(trial.study.study_name.split('_')[-1], '%Y-%m-%d') - relativedelta(days=1)
-            date_prev = date_prev.strftime('%Y-%m-%d')
-            tmp_model_dir = '../model/tmp'
-            tmp_model_path = '/'.join((tmp_model_dir, trial.study.study_name))
-            prev_tmp_model_path = '/'.join((tmp_model_dir, trial.study.study_name.replace(date, date_prev)))
-            if not os.path.exists(os.path.relpath(start='.', path=tmp_model_dir)):
-                os.makedirs(tmp_model_dir)
             train_loader, valid_loader = lgb.Dataset(train.drop('RV', axis=1), label=y_train),\
                 lgb.Dataset(valid.drop('RV', axis=1), label=y_valid)
             param = {
@@ -728,25 +654,12 @@ class UAM(TrainingScheme):
                           train_set=train_loader, valid_sets=[valid_loader], num_boost_round=NUM_BOOST_ROUND,
                           callbacks=[lgb.early_stopping(STOPPING_ROUNDS, first_metric_only=True, verbose=True,
                                                         min_delta=0.0)],
-                          categorical_feature=train.columns[train.columns.str.contains('is')].tolist(),
-                          init_model={True: os.path.relpath(start='.', path=prev_tmp_model_path),
-                                      False: None}[os.path.exists(os.path.relpath(start='.',
-                                                                                  path=prev_tmp_model_path))]
-                          )
+                          categorical_feature=train.columns[train.columns.str.contains('is')].tolist())
             trial.set_user_attr(key='best_score', value=model.best_score['valid_0']['l2'])
-            if idx == 0:
-                trial.user_attrs['best_estimator'].save_model(tmp_model_path)
+            trial.set_user_attr(key='best_estimator', value=model)
         else:
             train_date = train.index.get_level_values(1).unique().tolist()
             date = trial.study.study_name.split('_')[-1]
-            date_prev = datetime.strptime(trial.study.study_name.split('_')[-1], '%Y-%m-%d') - \
-                relativedelta(days=idx)
-            date_prev = date_prev.strftime('%Y-%m-%d')
-            tmp_model_dir = '../model/tmp'
-            tmp_model_path = '/'.join((tmp_model_dir, trial.study.study_name))
-            prev_tmp_model_path = '/'.join((tmp_model_dir, trial.study.study_name.replace(date, date_prev)))
-            if not os.path.exists(os.path.relpath(start='.', path=tmp_model_dir)):
-                os.makedirs(tmp_model_dir)
             params = {
                 'hidden_size': trial.suggest_categorical(name='hidden_size', choices=[2 ** i for i in range(3, 6)]),
                 'lr': trial.suggest_categorical(name='lr', choices=[1e-3, 5e-3, 1e-4]),
@@ -806,10 +719,7 @@ class UAM(TrainingScheme):
                 DataLoader(torch.tensor(valid_dataloader.values.reshape(BATCH_SIZE, VALID_SIZE, self._INPUT_SIZE + 1),
                                         dtype=torch.float32, device=DEVICE), shuffle=False, pin_memory=False,
                            batch_size=1)
-            if idx > 0:
-                model = torch.load(os.path.relpath(start='.', path=prev_tmp_model_path))
-                model.eval()
-            train_model(train=train_dataloader, valid=valid_dataloader, EPOCH={True: EPOCH, False: 1}[idx == 0],
+            train_model(train=train_dataloader, valid=valid_dataloader, EPOCH=EPOCH,
                         model=model, early_stopping_patience=EARLY_STOPPING_PATIENCE)
             y_hat = model(valid_dataloader.dataset[:, :, 1:])
             y = valid_dataloader.dataset[:, :, 0].view(y_hat.shape)
@@ -835,8 +745,6 @@ class UAM(TrainingScheme):
             model.scaling_second = second
             model.scaling_third = third
             model.scaling_name = params['scaling']
-            if idx == 0:
-                torch.save(model, tmp_model_path)
         trial.set_user_attr(key='best_estimator', value=model)
         return trial.user_attrs['best_score']
 
@@ -846,7 +754,7 @@ class UAM(TrainingScheme):
         df = df.fillna(df.ewm(span=12, min_periods=1).mean())
         return df
 
-    def add_metrics_freq(self, transformation: str, df: pd.DataFrame, date: datetime, idx: int, **kwargs) -> \
+    def add_metrics_freq(self, transformation: str, df: pd.DataFrame, date: datetime, **kwargs) -> \
             Union[Tuple[datetime, lightgbm.Booster], Tuple[datetime, LSTM_NNModel], Tuple[datetime, None]]:
         start_idx = pd.to_datetime((date - relativedelta(days={'1W': 7, '1M': 30, '6M': 180}[self._L])), utc=True)
         end_idx = pd.to_datetime((date - relativedelta(days=1)), utc=True)
@@ -866,10 +774,8 @@ class UAM(TrainingScheme):
         else:
             study_name = f'UAM_{self._L}_{transformation}_{self._regression_type}_{self._model_type}_{date}'
         study = optuna.create_study(direction='minimize', study_name=study_name, sampler=RandomSampler(123))
-        objective = partial(self.objective, train=train, valid=valid, init=idx != 0, idx=idx)
-        study.optimize(objective,
-                       n_trials={False: N_TRIALS, True: 1}[(idx != 0)&(self._regression_type == 'lightgbm')],
-                       callbacks=[self.callback], show_progress_bar=True, n_jobs=N_JOBS)
+        objective = partial(self.objective, train=train, valid=valid)
+        study.optimize(objective, n_trials=N_TRIALS, callbacks=[self.callback], show_progress_bar=True, n_jobs=N_JOBS)
         model = study.user_attrs['best_estimator']
         print(f'[End of Training]: {study_name} has been completed.')
         return date, model
@@ -904,51 +810,12 @@ class UAM(TrainingScheme):
                     df.loc[:, df.columns.str.contains('RV')])
             df = pd.concat([df, one_hot_encoding], axis=1)
             model_s = pd.Series(data=np.nan, index=dates[start_idx:])
-            for idx, date in enumerate(dates[start_idx::{'1W': 7, '1M': 30, '6M': 180}[self._L]]):
-                L_train_limit = (dates[-1] - date).days
-                date_model, model = \
-                    self.add_metrics_freq(transformation=transformation, df=df, date=date, idx=0, **kwargs)
-                model_s[date] = model
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    futures = \
-                        [executor.submit(self.add_metrics_freq, transformation, df,
-                                         date+relativedelta(days=idx), idx, **kwargs)
-                         for idx in range(1, min(L_train_limit, {'1W': 7, '1M': 30, '6M': 180}[self._L])+1)]
-                    for future in concurrent.futures.as_completed(futures):
-                        date, model = future.result()
-                        model_s[date] = model
-                if (len(kwargs) > 0)&(self._model_type == 'har_eq'):
-                    if isinstance(kwargs.get('top_book'), int):
-                        tmp_model_path = '_'.join((self.__class__.__name__, self._L, str(transformation),
-                                               regression_type, self._model_type,
-                                                   f'top_book_{kwargs.get("top_book")}',
-                                                   f'{date_model.strftime("%Y-%m-%d")}'))
-                    else:
-                        tmp_model_path = '_'.join((self.__class__.__name__, self._L, str(transformation),
-                                                   regression_type, self._model_type,
-                                                   f'trading_session{kwargs.get("trading_session")}',
-                                                   f'{date_model.strftime("%Y-%m-%d")}'))
-                else:
-                    if (len(kwargs) > 0)&(self._model_type == 'har_eq'):
-                        if isinstance(kwargs.get('top_book'), int):
-                            tmp_model_path = '_'.join((self.__class__.__name__, self._L, str(transformation),
-                                                       regression_type, self._model_type,
-                                                       f'_top_book_{kwargs.get("top_book")}',
-                                                       f'{date.strftime("%Y-¬%m-%d")}'))
-                        else:
-                            tmp_model_path = '_'.join((self.__class__.__name__, self._L, str(transformation),
-                                                       regression_type, self._model_type,
-                                                       f'_trading_session_{kwargs.get("trading_session")}',
-                                                       f'{date.strftime("%Y-%m-%d")}'))
-                    else:
-                        tmp_model_path = '_'.join((self.__class__.__name__, self._L, str(transformation),
-                                                   regression_type, self._model_type,
-                                                   date.strftime('%Y-%m-%d')))
-                    # tmp_model_path = '_'.join((self.__class__.__name__, self._L, str(transformation),
-                    #                            regression_type, self._model_type, date_model.strftime('%Y-%m-%d')))
-                tmp_model_dir = '../model/tmp'
-                tmp_model_path = '/'.join((tmp_model_dir, tmp_model_path))
-                os.remove(os.path.relpath(start='.', path=tmp_model_path))
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = [executor.submit(self.add_metrics_freq, transformation, df, date, **kwargs) for
+                           date in dates[start_idx:]]
+                for future in concurrent.futures.as_completed(futures):
+                    date, model = future.result()
+                    model_s[date] = model
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 if self._regression_type != 'lightgbm':
                     futures = [executor.submit(lambda x, df, model: reshape_dataframe(x, df, model), x=date, df=df,
@@ -967,7 +834,6 @@ class UAM(TrainingScheme):
                                                                 int(self._regression_type != 'lightgbm')]),
                                          columns=[{True: 'RV', False: 0}[self._regression_type != 'lightgbm']],
                                          index=df.loc[df.index.get_level_values(1).date == date, :].index)
-
                     if self._regression_type != 'lightgbm':
                         y_hat = y_hat.groupby(by=pd.Grouper(level='symbol'),
                                               group_keys=False).apply(
@@ -979,35 +845,35 @@ class UAM(TrainingScheme):
             y = pd.concat(y)
             y = df[['RV']].loc[y.index.unique(), :].join(y, how='inner')
             y = y.rename(columns={'RV': 'y', 0: 'y_hat'})
-        # else:
-        #     vars_dd = dict()
-        #     var_obj = VAR_Model()
-        #     with concurrent.futures.ThreadPoolExecutor() as executor:
-        #         futures = \
-        #             [executor.submit(var_obj.var_train, idx, date, df, self._L, self._transformation,
-        #                              self._factory_transformation_dd, **kwargs) for idx, date
-        #              in enumerate(dates[start_idx:])]
-        #         for future in concurrent.futures.as_completed(futures):
-        #             date, var = future.result()
-        #             vars_dd[date] = var
-        #     vars_dd = pd.DataFrame(vars_dd.items()).set_index(0).sort_index().ffill()
-        #     vars_dd = dict(zip(vars_dd.index, vars_dd.iloc[:, 0]))
-        #     with concurrent.futures.ThreadPoolExecutor() as executor:
-        #         futures = [executor.submit(var_obj.var_forecast, var_model, date, df, self._L, self._b) for date,
-        #         var_model in vars_dd.items()]
-        #         for future in concurrent.futures.as_completed(futures):
-        #             y.append(future.result())
-        #     y_hat = pd.concat(y).sort_index().unstack()
-        #     y = \
-        #         self.factory_transformation_dd[transformation]['transformation'](
-        #         df.loc[df.index.isin(y_hat.index.get_level_values(1).unique()), :])
-        #     y = y.unstack()
-        #     y = pd.concat([y, y_hat], axis=1)
-        #     y = \
-        #         y.reset_index().rename(columns={'level_0': 'symbol',
-        #                                         'level_1': 'timestamp',
-        #                                         0: 'y',
-        #                                         1: 'y_hat'}).set_index(['symbol', 'timestamp'])
+        else:
+            vars_dd = dict()
+            var_obj = VAR_Model()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = \
+                    [executor.submit(var_obj.var_train, idx, date, df, self._L, self._transformation,
+                                     self._factory_transformation_dd, **kwargs) for idx, date
+                     in enumerate(dates[start_idx:])]
+                for future in concurrent.futures.as_completed(futures):
+                    date, var = future.result()
+                    vars_dd[date] = var
+            vars_dd = pd.DataFrame(vars_dd.items()).set_index(0).sort_index().ffill()
+            vars_dd = dict(zip(vars_dd.index, vars_dd.iloc[:, 0]))
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = [executor.submit(var_obj.var_forecast, var_model, date, df, self._L, self._b) for date,
+                var_model in vars_dd.items()]
+                for future in concurrent.futures.as_completed(futures):
+                    y.append(future.result())
+            y_hat = pd.concat(y).sort_index().unstack()
+            y = \
+                self.factory_transformation_dd[transformation]['transformation'](
+                df.loc[df.index.isin(y_hat.index.get_level_values(1).unique()), :])
+            y = y.unstack()
+            y = pd.concat([y, y_hat], axis=1)
+            y = \
+                y.reset_index().rename(columns={'level_0': 'symbol',
+                                                'level_1': 'timestamp',
+                                                0: 'y',
+                                                1: 'y_hat'}).set_index(['symbol', 'timestamp'])
         y = self.factory_transformation_dd[transformation]['inverse'](y).sort_index(axis=0, level=[0, 1])
         y = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)]).sum()
         if kwargs.get('trading_session') in [1, None]:

@@ -3,7 +3,6 @@ import pdb
 from data_centre.data import Reader
 from model.training_schemes import SAM, ClustAM, CAM, UAM
 import argparse
-from pyinstrument import Profiler
 
 training_schemes = [SAM, ClustAM, CAM, UAM]
 training_scheme_factory_dd = {training_scheme.__name__: training_scheme for training_scheme in training_schemes}
