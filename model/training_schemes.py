@@ -43,9 +43,9 @@ EARLY_STOPPING_PATIENCE = 5
 class TrainingScheme(object):
     _reader_obj = Reader()
     _data_centre_dir = os.path.abspath(__file__).replace('/model/training_schemes.py', '/data_centre')
-    _db_connect_qlike = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases'
-                                                                 f'/qlike.db'),
-                                        check_same_thread=False)
+    # _db_connect_qlike = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases'
+    #                                                              f'/qlike.db'),
+    #                                     check_same_thread=False)
     _db_connect_y = sqlite3.connect(database=os.path.abspath(f'{_data_centre_dir}/databases/y.db'),
                                     check_same_thread=False)
     _factory_model_type_dd = {'ar': FeatureAR(), 'har': FeatureHAR(), 'risk_metrics': FeatureRiskMetrics(),
@@ -58,7 +58,7 @@ class TrainingScheme(object):
     global coins_dd
     coins_dd = {coin: {} for coin in coins}
     _training_scheme_y_dd = coins_dd.copy().copy()
-    _training_scheme_qlike_dd = coins_dd.copy().copy()
+    # _training_scheme_qlike_dd = coins_dd.copy().copy()
     L_shift_dd = {'5T': pd.to_timedelta('5T') // pd.to_timedelta('5T'),
                   '30T': pd.to_timedelta('30T') // pd.to_timedelta('5T'),
                   '1H': pd.to_timedelta('1H') // pd.to_timedelta('5T'),
@@ -369,16 +369,16 @@ class TrainingScheme(object):
         y = y.join(endog, how='left').sort_index().set_index('symbol', append=True).swaplevel(-1, 0)
         y = TrainingScheme._factory_transformation_dd[transformation]['inverse'](y)
         y = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)]).sum()
-        tmp = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)])
-        qlike = tmp.apply(qlike_score)
-        qlike = pd.Series(qlike, name=symbol)
-        qlike = pd.melt(pd.DataFrame(qlike), ignore_index=False, value_name='values', var_name='symbol')
-        qlike = qlike.assign(metric='qlike')
+        # tmp = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)])
+        # qlike = tmp.apply(qlike_score)
+        # qlike = pd.Series(qlike, name=symbol)
+        # qlike = pd.melt(pd.DataFrame(qlike), ignore_index=False, value_name='values', var_name='symbol')
+        # qlike = qlike.assign(metric='qlike')
         y.reset_index(level='symbol', inplace=True)
         y.index = pd.to_datetime(y.index, utc=True)
         y = y.rename(columns={symbol: 'y', 0: 'y_hat'})
-        table_dd = {'qlike': qlike, 'y': y}
-        training_scheme_tables = {'qlike': self._training_scheme_qlike_dd, 'y': self._training_scheme_y_dd}
+        table_dd = {'y': y} #'qlike': qlike,
+        training_scheme_tables = {'y': self._training_scheme_y_dd} #'qlike': self._training_scheme_qlike_dd,
         transformation_dd = {'log': 'log', None: 'level'}
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = \
@@ -415,9 +415,9 @@ class TrainingScheme(object):
         y = self._training_scheme_y_dd[symbol]
         y.columns = ['symbol', 'y_hat', 'y', 'model', 'L', 'training_scheme', 'regression', 'transformation',
                      'trading_session', 'top_book', 'h']
-        qlike = self._training_scheme_qlike_dd[symbol]
-        con_dd = {'qlike': TrainingScheme._db_connect_qlike, 'y': TrainingScheme._db_connect_y}
-        table_dd = {'qlike': qlike, 'y': y}
+        # qlike = self._training_scheme_qlike_dd[symbol]
+        con_dd = {'y': TrainingScheme._db_connect_y} #'qlike': TrainingScheme._db_connect_qlike,
+        table_dd = {'y': y} #'qlike': qlike,
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = \
                 [executor.submit(lambda x, y: (x, y), x=table_name, y=table) for table_name, table in table_dd.items()]
@@ -880,10 +880,10 @@ class UAM(TrainingScheme):
             tmp = \
                 y.loc[~y.index.get_level_values(0).str.contains('VIXM'), :].groupby(
                     by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)])
-        qlike = tmp.apply(qlike_score).reset_index(0).rename(columns={0: 'values'})
+        # qlike = tmp.apply(qlike_score).reset_index(0).rename(columns={0: 'values'})
         y = y.reset_index(0)
-        con_dd = {'qlike': TrainingScheme._db_connect_qlike, 'y': TrainingScheme._db_connect_y}
-        table_dd = {'y': y, 'qlike': qlike}
+        con_dd = {'y': TrainingScheme._db_connect_y} #'qlike': TrainingScheme._db_connect_qlike,
+        table_dd = {'y': y} #, 'qlike': qlike
         transformation_dd = {'log': 'log', None: 'level'}
         del kwargs['freq']
         if 'vixm' in kwargs.keys():
