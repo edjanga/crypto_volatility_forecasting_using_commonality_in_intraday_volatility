@@ -1,4 +1,5 @@
 import concurrent.futures
+import pdb
 import typing
 from typing import Tuple, Union
 import lightgbm
@@ -36,7 +37,7 @@ STOPPING_ROUNDS = 3
 MAX_ITER = 10
 N_TRIALS = 3
 N_JOBS = 1
-EPOCH = 300
+EPOCH = 100
 EARLY_STOPPING_PATIENCE = 5
 
 
@@ -187,7 +188,7 @@ class TrainingScheme(object):
 
     @staticmethod
     def objective(trial: optuna.trial.Trial, X_train: pd.DataFrame, X_valid: pd.DataFrame, y_train: pd.DataFrame,
-                  y_valid: pd.DataFrame, init: bool, idx: int):
+                  y_valid: pd.DataFrame):
         regression_type = trial.study.study_name.split('_')[3]
         if regression_type == 'lightgbm':
             date = trial.study.study_name.split('_')[-1]
@@ -224,7 +225,7 @@ class TrainingScheme(object):
             tmp_rres.fit(X_train.values, y_train)
         loss = mean_squared_error(y_valid, tmp_rres.predict(X_valid))
         trial.set_user_attr(key='best_estimator', value=tmp_rres)
-        return loss
+        return loss #, init: bool, idx: int
 
     @staticmethod
     def callback(study, trial):
@@ -581,18 +582,6 @@ class CAM(TrainingScheme):
                                            regression_type=regression_type, df=df, **kwargs)
                            for symbol in df.columns[idx:idx+5]]
 
-    @property
-    def feature_importance(self):
-        return self._feature_importance
-
-    @property
-    def feature_importance_symbol(self):
-        return self._feature_importance_symbol
-
-    @feature_importance.setter
-    def feature_importance(self, df: pd.DataFrame):
-        self._feature_importance = df
-
 
 class UAM(TrainingScheme):
 
@@ -762,7 +751,7 @@ class UAM(TrainingScheme):
         train_range = split_train_valid_set(train)
         valid = train.loc[~train.index.get_level_values(1).isin(train_range), :]
         train = train.loc[train.index.get_level_values(1).isin(train_range), :]
-        if (len(kwargs) > 0)&(self._model_type == 'har_eq'):
+        if (len(kwargs) > 0) & (self._model_type == 'har_eq'):
             if isinstance(kwargs.get('top_book'), int):
                 study_name = f'UAM_{self._L}_{transformation}_{self._regression_type}_{self._model_type}' \
                              f'_top_book_{kwargs.get("top_book")}_{date}'
@@ -808,12 +797,16 @@ class UAM(TrainingScheme):
                     df.loc[:, df.columns.str.contains('RV')])
             df = pd.concat([df, one_hot_encoding], axis=1)
             model_s = pd.Series(data=np.nan, index=dates[start_idx:])
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = [executor.submit(self.add_metrics_freq, transformation, df, date, **kwargs) for
-                           date in dates[start_idx:]]
-                for future in concurrent.futures.as_completed(futures):
-                    date, model = future.result()
-                    model_s[date] = model
+            for date in dates[start_idx:]:
+                date, model = self.add_metrics_freq(transformation, df, date, **kwargs)
+                model_s[date] = model
+            #
+            # with concurrent.futures.ThreadPoolExecutor() as executor:
+            #     futures = [executor.submit(self.add_metrics_freq, transformation, df, date, **kwargs) for
+            #                date in dates[start_idx:]]
+            #     for future in concurrent.futures.as_completed(futures):
+            #         date, model = future.result()
+            #         model_s[date] = model
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 if self._regression_type != 'lightgbm':
                     futures = [executor.submit(lambda x, df, model: reshape_dataframe(x, df, model), x=date, df=df,
@@ -874,12 +867,12 @@ class UAM(TrainingScheme):
                                                 1: 'y_hat'}).set_index(['symbol', 'timestamp'])
         y = self.factory_transformation_dd[transformation]['inverse'](y).sort_index(axis=0, level=[0, 1])
         y = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)]).sum()
-        if kwargs.get('trading_session') in [1, None]:
-            tmp = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)])
-        else:
-            tmp = \
-                y.loc[~y.index.get_level_values(0).str.contains('VIXM'), :].groupby(
-                    by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)])
+        # if kwargs.get('trading_session') in [1, None]:
+        #     tmp = y.groupby(by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)])
+        # else:
+        #     tmp = \
+        #         y.loc[~y.index.get_level_values(0).str.contains('VIXM'), :].groupby(
+        #             by=[pd.Grouper(level='symbol'), pd.Grouper(level='timestamp', freq=self._h)])
         # qlike = tmp.apply(qlike_score).reset_index(0).rename(columns={0: 'values'})
         y = y.reset_index(0)
         con_dd = {'y': TrainingScheme._db_connect_y} #'qlike': TrainingScheme._db_connect_qlike,
