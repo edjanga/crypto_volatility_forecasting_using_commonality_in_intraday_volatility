@@ -43,8 +43,10 @@ L_dd = {'1W': '7D', '1M': '30D', '6M': '180D'}
 """Functions used to facilitate computation within classes."""
 
 
-def qlike_score(x: pd.DataFrame) -> float:
-    return (np.exp(x.iloc[:, 0].div(x.iloc[:, -1]))-(x.iloc[:, 0].div(x.iloc[:, -1]))-1).mean()
+def qlike_score(x: pd.DataFrame, log: bool = False) -> float:
+    qlike = x.iloc[:, 0].div(x.iloc[:, -1]) - np.log(x.iloc[:, 0].div(x.iloc[:, -1]))-1 if not log else \
+        np.exp(x.iloc[:, 0]).div(np.exp(x.iloc[:, -1]))-x.iloc[:, 0].subtract(x.iloc[:, -1])-1
+    return qlike
 
 
 def lags(df: pd.DataFrame, L_train: typing.List[str]):
@@ -124,12 +126,12 @@ class DMTest:
         self._L = L
 
     @staticmethod
-    def table() -> None:
+    def table(h: str = '30min') -> None:
         """
             Method computing a matrix with DM statistics for every (i,j) as entries
         """
         table = DMTest.query_obj.best_model_for_all_windows_query()
-        table = DMTest.query_obj.query_data(table, table='y')
+        # table = DMTest.query_obj.query_data(table, table='y')
         rv = DMTest.reader_obj.rv_read()
         dm_test = dict()
         final_dm_results = dict()
@@ -147,13 +149,17 @@ class DMTest:
                                 index='timestamp', values='y_hat')
             SAM[L.lower()] = tmp
             best_model = table.query(f'L == "{L}"')
-            h = best_model.h.unique()[0]
-            best_model = DMTest.query_obj.forecast_query(L=best_model['L'].values[0],
-                                                         training_scheme=best_model['training_scheme'].values[0],
-                                                         model=best_model['model'].values[0],
-                                                         trading_session=best_model['trading_session'].values[0],
-                                                         top_book=best_model['top_book'].values[0],
-                                                         regression=best_model['regression'].values[0])
+            best_model = \
+                DMTest.query_obj.forecast_query(L=best_model['L'].values[0],
+                                                training_scheme=best_model['training_scheme'].values[0],
+                                                model=best_model['model'].values[0],
+                                                trading_session=best_model['trading_session'].values[0] if
+                                                np.isnan(best_model['trading_session'].values[0]) else
+                                                int(best_model['trading_session'].values[0]),
+                                                top_book=best_model['top_book'].values[0] if
+                                                np.isnan(best_model['top_book'].values[0]) else
+                                                int(best_model['top_book'].values[0]),
+                                                regression=best_model['regression'].values[0])
             best_model = pd.pivot(best_model[['y_hat', 'symbol']], columns='symbol', values='y_hat')
             best_model.index = pd.to_datetime(best_model.index)
             if 'resampled_rv' not in vars():
@@ -166,7 +172,7 @@ class DMTest:
                     tmp.index = pd.to_datetime(tmp.index, utc=True)
                     dm_test[tag] = \
                         (tmp.sub(resampled_rv) ** 2).sub(best_model).dropna(axis=1, how='all').mean(axis=1).dropna()
-            dm_test = pd.DataFrame(dm_test)
+            dm_test = pd.DataFrame(dm_test).dropna()
             final_dm_results[idx] = dm_test.mean().div(dm_test.std())
         final_dm_results = pd.concat(final_dm_results).unstack(0).rename(
             columns={idx: f'$\mathcal{{M}}^{{{L.lower()}}}$' for idx,
